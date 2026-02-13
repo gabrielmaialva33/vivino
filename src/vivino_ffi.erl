@@ -2,7 +2,8 @@
 -export([read_line/0, open_serial/2, detect_port/0, timestamp_ms/0,
          send_serial_cmd/1, read_port_line/1, write_serial/2,
          put_label/1, get_label/0, put_organism/1, get_organism/0,
-         get_env/1]).
+         get_env/1,
+         tcp_connect/2, tcp_send/2, tcp_close/1]).
 
 %% Read a line from stdin with error handling.
 %% Returns {ok, Binary} | {error, nil}
@@ -155,3 +156,24 @@ send_serial_cmd(Cmd) ->
                 _ -> {error, nil}
             end
     end.
+
+%% TCP relay client — connect to remote VPS relay server
+tcp_connect(Host, Port) ->
+    case gen_tcp:connect(binary_to_list(Host), Port,
+                         [binary, {packet, line}, {active, false},
+                          {nodelay, true}], 5000) of
+        {ok, Socket} -> {ok, Socket};
+        {error, _Reason} -> {error, nil}
+    end.
+
+%% Send JSON line over TCP (appends newline for {packet, line})
+tcp_send(Socket, Data) ->
+    case gen_tcp:send(Socket, [Data, "\n"]) of
+        ok -> {ok, nil};
+        {error, _} -> {error, nil}
+    end.
+
+%% Close TCP socket
+tcp_close(Socket) ->
+    gen_tcp:close(Socket),
+    {ok, nil}.

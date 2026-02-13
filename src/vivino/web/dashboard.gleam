@@ -587,7 +587,7 @@ function onOrganismAck(d){
 
 // === WEBSOCKET ===
 function connect(){
-  const ws=new WebSocket('ws://'+location.host+'/ws');_ws=ws;
+  const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws');_ws=ws;
   ws.onopen=()=>{_dot.className='dot on';_conn.textContent='ON';showToast('Conectado','ok');};
   ws.onclose=()=>{_ws=null;_dot.className='dot';_conn.textContent='OFF';document.querySelectorAll('.stim-btn').forEach(b=>b.classList.remove('active'));setTimeout(connect,2000);};
   ws.onerror=()=>ws.close();
