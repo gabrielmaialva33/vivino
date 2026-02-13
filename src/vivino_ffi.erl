@@ -5,7 +5,8 @@
          get_env/1,
          tcp_connect/2, tcp_send/2, tcp_close/1,
          ptz_move/2, ptz_stop/1,
-         open_vision/3, read_vision_line/1, vision_cmd/2]).
+         open_vision/3, read_vision_line/1, vision_cmd/2,
+         speak/1]).
 
 %% Read a line from stdin with error handling.
 %% Returns {ok, Binary} | {error, nil}
@@ -199,8 +200,12 @@ open_vision(RtspUrl, ModelPath, Conf) ->
     PrivDir = code:priv_dir(vivino),
     DetectorPath = filename:join(PrivDir, "vision_detector.py"),
     ConfStr = float_to_list(Conf, [{decimals, 2}]),
+    Python = case os:find_executable("python3") of
+        false -> "/usr/bin/python3";
+        Path -> Path
+    end,
     Port = open_port(
-        {spawn_executable, "/usr/bin/python3"},
+        {spawn_executable, Python},
         [{args, ["-u", DetectorPath,
                  binary_to_list(RtspUrl),
                  "--model", binary_to_list(ModelPath),
@@ -227,6 +232,27 @@ read_vision_line(Port) ->
 vision_cmd(Port, Cmd) ->
     port_command(Port, [Cmd, "\n"]),
     {ok, nil}.
+
+%% ============================================================
+%% Text-to-Speech via espeak-ng (fire-and-forget)
+%% ============================================================
+
+speak(Text) ->
+    spawn(fun() ->
+        try
+            Port = open_port({spawn_executable, "/usr/bin/espeak-ng"},
+                [{args, ["-v", "pt-br", "-s", "140",
+                         binary_to_list(Text)]},
+                 exit_status, use_stdio, binary, stderr_to_stdout]),
+            receive
+                {Port, {exit_status, _}} -> ok
+            after 15000 ->
+                catch port_close(Port)
+            end
+        catch _:_ -> ok
+        end
+    end),
+    nil.
 
 %% TCP relay client — connect to remote VPS relay server
 tcp_connect(Host, Port) ->

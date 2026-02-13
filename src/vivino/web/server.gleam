@@ -18,6 +18,7 @@ import mist.{
 import vivino/serial/port
 import vivino/signal/label_bridge
 import vivino/vision/ptz
+import vivino/vision/voice
 import vivino/web/dashboard
 import vivino/web/pubsub
 
@@ -149,6 +150,17 @@ fn handle_websocket(
                 }
                 Error(_) -> Nil
               }
+              mist.continue(state)
+            }
+            // Talk command: T:text to speak
+            Ok(#("T", text)) -> {
+              voice.speak(text)
+              io.println("SPEAK: " <> text)
+              let _ =
+                mist.send_text_frame(
+                  conn,
+                  "{\"type\":\"speak_ack\",\"text\":\"" <> text <> "\"}",
+                )
               mist.continue(state)
             }
             // Organism command: O:shimeji, O:cannabis, O:fungal_generic

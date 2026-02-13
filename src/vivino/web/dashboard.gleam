@@ -354,6 +354,10 @@ fn body() -> String {
         <div></div><button class='ptz-btn' onclick='sendPtz(\"DOWN\")'>&#9660;</button><div></div>
       </div>
       <div class='vis-det-list' id='visDetList'></div>
+      <div style='margin-top:8px;display:flex;gap:4px'>
+        <input id='ttsInput' type='text' placeholder='Falar...' style='flex:1;background:rgba(255,255,255,.03);border:1px solid var(--b1);border-radius:4px;padding:6px 8px;color:var(--t1);font-family:var(--mono);font-size:.7em' onkeydown='if(event.key===\"Enter\")sendSpeak()'>
+        <button class='ptz-btn' onclick='sendSpeak()' style='padding:6px 12px;font-size:.7em'>Falar</button>
+      </div>
     </div>
   </div>
 
@@ -647,6 +651,14 @@ function sendPtz(dir){
 }
 function onPtzAck(d){showToast('PTZ: '+d.direction,'ok');}
 
+function sendSpeak(){
+  const inp=$('ttsInput');if(!inp)return;
+  const txt=inp.value.trim();if(!txt)return;
+  if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
+  _ws.send('T:'+txt);inp.value='';
+}
+function onSpeakAck(d){showToast('Falando: '+d.text,'ok');}
+
 // === WEBSOCKET ===
 function connect(){
   const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws');_ws=ws;
@@ -660,6 +672,7 @@ function connect(){
     else if(d.type==='organism_ack')onOrganismAck(d);
     else if(d.type==='vision')onVision(d);
     else if(d.type==='ptz_ack')onPtzAck(d);
+    else if(d.type==='speak_ack')onSpeakAck(d);
     else{buf.push(d);if(!rafId)rafId=requestAnimationFrame(flush);}
   };
 }
