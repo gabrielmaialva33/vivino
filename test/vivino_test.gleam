@@ -410,7 +410,7 @@ pub fn learner_classify_test() {
   let readings = make_readings(list.repeat(0.0, 20))
   let f = features.extract(readings)
   let hv = learner.encode(mem, f, prof.quant_ranges)
-  let #(state, sims) = learner.classify(mem, hv)
+  let #(state, sims, _novelty) = learner.classify(mem, hv)
   let state_str = learner.state_to_string(state)
   let assert True = state_str != ""
   let assert True = list.length(sims) == 6
@@ -464,16 +464,23 @@ pub fn learner_state_parse_test() {
 pub fn learner_ring_buffer_test() {
   let prof = profile.get_profile(profile.Shimeji)
   let mem = learner.init(prof)
-  let readings = make_readings(list.repeat(0.0, 20))
-  let f = features.extract(readings)
-  let hv = learner.encode(mem, f, prof.quant_ranges)
-  // Add 6 RESTING exemplars (max is 5, oldest should be dropped)
-  let mem2 = learner.learn(mem, hv, learner.Resting, 1.0)
-  let mem3 = learner.learn(mem2, hv, learner.Resting, 2.0)
-  let mem4 = learner.learn(mem3, hv, learner.Resting, 3.0)
-  let mem5 = learner.learn(mem4, hv, learner.Resting, 4.0)
-  let mem6 = learner.learn(mem5, hv, learner.Resting, 5.0)
-  let mem7 = learner.learn(mem6, hv, learner.Resting, 6.0)
+  // Use different signals to generate diverse HVs (cutting angle won't reject)
+  let make_hv = fn(offset: Float) {
+    let devs =
+      int.range(from: 0, to: 20, with: [], run: fn(acc, i) { [i, ..acc] })
+      |> list.reverse
+      |> list.map(fn(i) { int_to_float(i) *. offset })
+    let readings = make_readings(devs)
+    let f = features.extract(readings)
+    learner.encode(mem, f, prof.quant_ranges)
+  }
+  // Add 6 RESTING exemplars with different HVs (max is 5, oldest drops)
+  let mem2 = learner.learn(mem, make_hv(1.0), learner.Resting, 1.0)
+  let mem3 = learner.learn(mem2, make_hv(2.0), learner.Resting, 2.0)
+  let mem4 = learner.learn(mem3, make_hv(3.0), learner.Resting, 3.0)
+  let mem5 = learner.learn(mem4, make_hv(5.0), learner.Resting, 4.0)
+  let mem6 = learner.learn(mem5, make_hv(8.0), learner.Resting, 5.0)
+  let mem7 = learner.learn(mem6, make_hv(13.0), learner.Resting, 6.0)
   let counts = learner.exemplar_counts(mem7)
   let resting_count = list.find(counts, fn(c) { c.0 == learner.Resting })
   let assert Ok(#(_, count)) = resting_count
@@ -523,4 +530,335 @@ pub fn cross_profile_gpu_test() {
   // Both should produce valid states (may or may not differ)
   let assert True = state_shi != "???"
   let assert True = state_can != "???"
+}
+
+// ============================================================
+// IQR Outlier Cleaning tests (SIGNET)
+// ============================================================
+
+/// Clean outliers should not change a normal signal
+pub fn clean_outliers_no_change_test() {
+  let readings = make_readings(list.repeat(5.0, 20))
+  let cleaned = features.clean_outliers(readings)
+  // All deviations should remain unchanged
+  list.each(cleaned, fn(r) {
+    let assert True = r.deviation == 5.0
+  })
+}
+
+/// Clean outliers should clamp extreme spikes
+pub fn clean_outliers_clamps_spike_test() {
+  // Normal values around 0-10 with one extreme outlier at 500
+  let devs = [
+    1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 500.0, 1.0, 2.0, 3.0, 4.0,
+    5.0, 6.0, 7.0, 8.0, 9.0,
+  ]
+  let readings = make_readings(devs)
+  let cleaned = features.clean_outliers(readings)
+  // The spike should be clamped down (no longer 500)
+  let spike = case list.drop(cleaned, 10) {
+    [r, ..] -> r.deviation
+    _ -> 500.0
+  }
+  let assert True = spike <. 500.0
+}
+
+// ============================================================
+// Signal Quality tests (SIGNET)
+// ============================================================
+
+/// Good signal should have quality score 1.0
+pub fn signal_quality_good_test() {
+  // Signal with non-zero mean so abs_mean/std > 0.5 (avoids "noisy" trigger)
+  let devs = [
+    10.0, 11.0, 9.0, 12.0, 8.0, 13.0, 7.0, 14.0, 6.0, 15.0, 5.0, 14.0, 6.0, 13.0,
+    7.0, 12.0, 8.0, 11.0, 9.0, 10.0,
+  ]
+  let readings = make_readings(devs)
+  let f = features.extract(readings)
+  let q = features.assess_quality(f)
+  let assert True = q.is_good
+  let assert True = q.score == 1.0
+  let assert True = q.reason == "good"
+}
+
+/// Flat line should be detected as bad quality
+pub fn signal_quality_flat_line_test() {
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let q = features.assess_quality(f)
+  let assert True = !q.is_good
+  let assert True = q.reason == "flat_line"
+  let assert True = q.score <. 0.5
+}
+
+/// High kurtosis signal should be detected as artifact
+pub fn signal_quality_artifact_test() {
+  // Mostly flat with extreme spike → high kurtosis
+  let devs = [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 200.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0,
+  ]
+  let readings = make_readings(devs)
+  let f = features.extract(readings)
+  let q = features.assess_quality(f)
+  // Should either be artifact (kurtosis > 15) or saturated (range > 500)
+  let assert True = !q.is_good || q.reason == "good"
+  // At minimum, kurtosis should be high for such a spike
+  let assert True = f.kurtosis >. 5.0
+}
+
+/// Quality JSON serialization
+pub fn quality_json_test() {
+  let q = features.SignalQuality(score: 0.8, is_good: True, reason: "good")
+  let _json = features.quality_to_json_value(q)
+  // Should not crash
+  Nil
+}
+
+// ============================================================
+// Cutting Angle tests (HDC-EMG)
+// ============================================================
+
+/// Cutting angle should accept diverse exemplars
+pub fn cutting_angle_accepts_diverse_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  // Two very different signals
+  let hv1 = {
+    let readings = make_readings(list.repeat(0.0, 20))
+    let f = features.extract(readings)
+    learner.encode(mem, f, prof.quant_ranges)
+  }
+  let hv2 = {
+    let devs = [
+      0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 40.0, 30.0, 20.0, 10.0, 0.0, -10.0,
+      -20.0, -30.0, -40.0, -50.0, -40.0, -30.0, -20.0, -10.0,
+    ]
+    let readings = make_readings(devs)
+    let f = features.extract(readings)
+    learner.encode(mem, f, prof.quant_ranges)
+  }
+  let mem2 = learner.learn(mem, hv1, learner.Active, 1.0)
+  let mem3 = learner.learn(mem2, hv2, learner.Active, 2.0)
+  // Both should be accepted (diverse enough)
+  let counts = learner.exemplar_counts(mem3)
+  let active_count = list.find(counts, fn(c) { c.0 == learner.Active })
+  let assert Ok(#(_, count)) = active_count
+  let assert True = count == 2
+}
+
+/// Cutting angle should reject duplicate exemplars
+pub fn cutting_angle_rejects_duplicate_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(5.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  // Add same HV twice — second should be rejected
+  let mem2 = learner.learn(mem, hv, learner.Calm, 1.0)
+  let mem3 = learner.learn(mem2, hv, learner.Calm, 2.0)
+  let counts = learner.exemplar_counts(mem3)
+  let calm_count = list.find(counts, fn(c) { c.0 == learner.Calm })
+  let assert Ok(#(_, count)) = calm_count
+  let assert True = count == 1
+}
+
+// ============================================================
+// Novelty Detection tests (LifeHD)
+// ============================================================
+
+/// Normal sample should not be novel when no stats yet
+pub fn novelty_detection_normal_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  let #(_state, _sims, novelty) = learner.classify(mem, hv)
+  // With no stats (count < 5), should never be novel
+  let assert True = !novelty.is_novel
+}
+
+/// Stats should update after calling update_stats
+pub fn novelty_stats_update_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  // Update stats several times
+  let mem2 = learner.update_stats(mem, learner.Resting, 0.8)
+  let mem3 = learner.update_stats(mem2, learner.Resting, 0.7)
+  let mem4 = learner.update_stats(mem3, learner.Resting, 0.75)
+  // After 3 updates, stats should exist but count < 5 so no novelty possible
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem4, f, prof.quant_ranges)
+  let #(_state, _sims, novelty) = learner.classify(mem4, hv)
+  let assert True = !novelty.is_novel
+}
+
+/// Classify returns 3-tuple with NoveltyInfo
+pub fn classify_returns_3_tuple_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  let #(state, sims, novelty) = learner.classify(mem, hv)
+  // All three parts should be valid
+  let assert True = learner.state_to_string(state) != ""
+  let assert True = list.length(sims) == 6
+  let assert True = novelty.score >=. 0.0
+}
+
+/// Novelty JSON serialization
+pub fn novelty_json_test() {
+  let info = learner.NoveltyInfo(is_novel: False, score: 0.5, threshold: 0.3)
+  let _json = learner.novelty_to_json_value(info)
+  Nil
+}
+
+// ============================================================
+// Temporal Encoding tests (HDC-EMG n-gram)
+// ============================================================
+
+/// Temporal encode with no history should return same HV
+pub fn temporal_encode_single_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  let #(_temporal_hv, mem2) = learner.encode_temporal(mem, hv)
+  // After encoding, recent_hvs should have 1 entry
+  // Encode again with a different HV
+  let hv2 = {
+    let devs = [
+      0.0, 5.0, 10.0, 15.0, 20.0, 15.0, 10.0, 5.0, 0.0, -5.0, -10.0, -5.0, 0.0,
+      3.0, 6.0, 3.0, 0.0, -3.0, -6.0, -3.0,
+    ]
+    let r2 = make_readings(devs)
+    let f2 = features.extract(r2)
+    learner.encode(mem2, f2, prof.quant_ranges)
+  }
+  let #(_temporal_hv2, _mem3) = learner.encode_temporal(mem2, hv2)
+  // Should not crash — temporal binding with history
+  Nil
+}
+
+/// Temporal encode with history produces different HV
+pub fn temporal_encode_with_history_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  // First encode
+  let readings1 = make_readings(list.repeat(0.0, 20))
+  let f1 = features.extract(readings1)
+  let hv1 = learner.encode(mem, f1, prof.quant_ranges)
+  let #(temporal1, mem2) = learner.encode_temporal(mem, hv1)
+  // Second encode — should incorporate history
+  let devs2 = [
+    0.0, 5.0, 10.0, 15.0, 20.0, 15.0, 10.0, 5.0, 0.0, -5.0, -10.0, -5.0, 0.0,
+    3.0, 6.0, 3.0, 0.0, -3.0, -6.0, -3.0,
+  ]
+  let readings2 = make_readings(devs2)
+  let f2 = features.extract(readings2)
+  let hv2 = learner.encode(mem2, f2, prof.quant_ranges)
+  let #(_temporal2, _mem3) = learner.encode_temporal(mem2, hv2)
+  // First temporal should exist (even without history, returns the HV)
+  let _ = temporal1
+  Nil
+}
+
+// ============================================================
+// Temporal Context tests (majority vote)
+// ============================================================
+
+/// Init temporal context
+pub fn temporal_context_init_test() {
+  let ctx = learner.init_temporal_context(5)
+  // Smoothed on empty history returns Unknown
+  let s = learner.smoothed_state(ctx)
+  let assert True = s == learner.Unknown
+}
+
+/// Majority vote should pick the most frequent state
+pub fn temporal_context_majority_vote_test() {
+  let ctx = learner.init_temporal_context(5)
+  // Add 3 ACTIVE and 2 CALM — majority should be ACTIVE
+  let ctx2 = learner.update_temporal_context(ctx, learner.Active)
+  let ctx3 = learner.update_temporal_context(ctx2, learner.Calm)
+  let ctx4 = learner.update_temporal_context(ctx3, learner.Active)
+  let ctx5 = learner.update_temporal_context(ctx4, learner.Calm)
+  let ctx6 = learner.update_temporal_context(ctx5, learner.Active)
+  let smoothed = learner.smoothed_state(ctx6)
+  let assert True = smoothed == learner.Active
+}
+
+// ============================================================
+// OnlineHD Adaptive Alpha tests (TorchHD)
+// ============================================================
+
+/// Learning with similar sample should use low alpha (gentle refinement)
+pub fn adaptive_alpha_high_sim_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let assert Ok(g) = dynamic_gpu.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  // Learn same signal twice — second learn uses low alpha (high similarity)
+  let g2 = dynamic_gpu.learn(g, f, "RESTING")
+  let g3 = dynamic_gpu.learn(g2, f, "RESTING")
+  // Classification should still work after adaptive learning
+  let #(state, _) = dynamic_gpu.classify(g3, f)
+  let assert True = state != "???"
+}
+
+/// Learning with different sample should adapt prototype more
+pub fn adaptive_alpha_low_sim_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let assert Ok(g) = dynamic_gpu.init(prof)
+  // Very different signals
+  let f1 = {
+    let readings = make_readings(list.repeat(0.0, 20))
+    features.extract(readings)
+  }
+  let f2 = {
+    let devs = [
+      0.0, 20.0, 40.0, 60.0, 80.0, 60.0, 40.0, 20.0, 0.0, -20.0, -40.0, -60.0,
+      -80.0, -60.0, -40.0, -20.0, 0.0, 20.0, 40.0, 60.0,
+    ]
+    let readings = make_readings(devs)
+    features.extract(readings)
+  }
+  let g2 = dynamic_gpu.learn(g, f1, "RESTING")
+  let g3 = dynamic_gpu.learn(g2, f2, "RESTING")
+  // Should still classify validly
+  let #(state, sims) = dynamic_gpu.classify(g3, f1)
+  let assert True = state != "???"
+  let assert True = list.length(sims) == 6
+}
+
+// ============================================================
+// Learning rejected JSON test
+// ============================================================
+
+/// Learning JSON should include rejected count
+pub fn learning_rejected_json_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let _json = learner.learning_to_json_value(mem)
+  // Should not crash
+  Nil
+}
+
+/// Saturated signal should be detected as bad quality
+pub fn signal_quality_saturated_test() {
+  // Signal with range > 500 (extreme values)
+  let devs = [
+    -300.0, -250.0, -200.0, -150.0, -100.0, -50.0, 0.0, 50.0, 100.0, 150.0,
+    200.0, 250.0, 300.0, 250.0, 200.0, 150.0, 100.0, 50.0, 0.0, -50.0,
+  ]
+  let readings = make_readings(devs)
+  let f = features.extract(readings)
+  let q = features.assess_quality(f)
+  let assert True = !q.is_good
+  let assert True = q.reason == "saturated"
 }

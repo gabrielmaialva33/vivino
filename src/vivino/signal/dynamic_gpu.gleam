@@ -1,8 +1,9 @@
-//// Profile-parameterized GPU classifier with EMA learning.
+//// Profile-parameterized GPU classifier with OnlineHD adaptive learning.
 ////
 //// Same euclidean distance + softmax architecture as gpu.gleam,
 //// but prototypes, bounds, and temperature come from OrganismProfile.
-//// Online learning via exponential moving average prototype updates.
+//// Online learning via similarity-weighted EMA (OnlineHD/TorchHD approach):
+//// alpha = base_lr * (1 - similarity) — learns more from novel samples.
 
 import gleam/float
 import gleam/int
@@ -32,8 +33,8 @@ pub type DynamicGpuClassifier {
 
 const num_states = 6
 
-/// EMA learning rate
-const alpha = 0.1
+/// OnlineHD base learning rate (TorchHD-inspired)
+const base_lr = 0.2
 
 /// Initialize from organism profile
 pub fn init(profile: OrganismProfile) -> Result(DynamicGpuClassifier, String) {
@@ -64,7 +65,10 @@ pub fn classify(
   make_result(softmax(neg_dists, gpu.temp))
 }
 
-/// Learn from a labeled sample via EMA prototype update
+/// Learn from a labeled sample via OnlineHD similarity-weighted EMA
+///
+/// Alpha = base_lr * (1 - cosine_similarity) — novel samples get larger
+/// updates, familiar samples get gentle refinement. TorchHD-inspired.
 pub fn learn(
   gpu: DynamicGpuClassifier,
   f: SignalFeatures,
@@ -82,7 +86,9 @@ pub fn learn(
         list.index_map(gpu.prototypes, fn(proto, i) {
           case i == state_idx {
             True -> {
-              // EMA: new = alpha * sample + (1-alpha) * old
+              // OnlineHD: alpha = base_lr * (1 - similarity)
+              let sim = cosine_similarity(norm, proto)
+              let alpha = float.clamp(base_lr *. { 1.0 -. sim }, 0.01, 0.3)
               let updated =
                 list.zip(norm, proto)
                 |> list.map(fn(pair) {
@@ -135,6 +141,21 @@ fn normalize_features(
       False -> 0.5
     }
   })
+}
+
+/// Cosine similarity between two vectors (for OnlineHD alpha)
+fn cosine_similarity(a: List(Float), b: List(Float)) -> Float {
+  let #(dot, norm_a, norm_b) =
+    list.zip(a, b)
+    |> list.fold(#(0.0, 0.0, 0.0), fn(acc, pair) {
+      let #(d, na, nb) = acc
+      #(d +. pair.0 *. pair.1, na +. pair.0 *. pair.0, nb +. pair.1 *. pair.1)
+    })
+  let denom = math_sqrt(norm_a) *. math_sqrt(norm_b)
+  case denom >. 0.0 {
+    True -> float.clamp(dot /. denom, -1.0, 1.0)
+    False -> 0.0
+  }
 }
 
 /// Euclidean distance between two vectors

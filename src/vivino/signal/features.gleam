@@ -600,6 +600,86 @@ pub fn default_thresholds() -> FeatureThresholds {
   )
 }
 
+// ============================================
+// IQR Outlier Cleaning (SIGNET-inspired)
+// Clamp spikes outside [Q1 - 2*IQR, Q3 + 2*IQR]
+// ============================================
+
+/// Clean outliers from readings using IQR method
+pub fn clean_outliers(readings: List(Reading)) -> List(Reading) {
+  case readings {
+    [] | [_] -> readings
+    _ -> {
+      let deviations =
+        list.map(readings, fn(r) { r.deviation })
+        |> list.sort(float.compare)
+      let n = list.length(deviations)
+      let q1 = list_at_float(deviations, n / 4)
+      let q3 = list_at_float(deviations, { n * 3 } / 4)
+      let iqr = q3 -. q1
+      case iqr >. 0.001 {
+        True -> {
+          let lower = q1 -. 2.0 *. iqr
+          let upper = q3 +. 2.0 *. iqr
+          list.map(readings, fn(r) {
+            let clamped = float.clamp(r.deviation, lower, upper)
+            parser.Reading(..r, deviation: clamped)
+          })
+        }
+        // No spread — nothing to clean
+        False -> readings
+      }
+    }
+  }
+}
+
+// ============================================
+// Signal Quality Assessment (SIGNET-inspired)
+// ============================================
+
+/// Signal quality assessment result
+pub type SignalQuality {
+  SignalQuality(score: Float, is_good: Bool, reason: String)
+}
+
+/// Assess signal quality from extracted features
+pub fn assess_quality(f: SignalFeatures) -> SignalQuality {
+  // Flat line — electrode disconnected?
+  case f.std <. 0.001 {
+    True -> SignalQuality(score: 0.1, is_good: False, reason: "flat_line")
+    False ->
+      // Saturated — extreme range
+      case f.range >. 500.0 {
+        True -> SignalQuality(score: 0.2, is_good: False, reason: "saturated")
+        False ->
+          // Artifact — extreme kurtosis
+          case f.kurtosis >. 15.0 {
+            True ->
+              SignalQuality(score: 0.3, is_good: False, reason: "artifact")
+            False -> {
+              // Noisy — low SNR
+              let abs_mean = float.absolute_value(f.mean)
+              case abs_mean /. f.std <. 0.5 && f.std >. 1.0 {
+                True ->
+                  SignalQuality(score: 0.4, is_good: False, reason: "noisy")
+                False ->
+                  SignalQuality(score: 1.0, is_good: True, reason: "good")
+              }
+            }
+          }
+      }
+  }
+}
+
+/// Signal quality as JSON value
+pub fn quality_to_json_value(q: SignalQuality) -> json.Json {
+  json.object([
+    #("score", json.float(q.score)),
+    #("is_good", json.bool(q.is_good)),
+    #("reason", json.string(q.reason)),
+  ])
+}
+
 /// Convert features to JSON
 pub fn to_json(f: SignalFeatures) -> String {
   to_json_value(f) |> json.to_string

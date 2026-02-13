@@ -7,7 +7,7 @@ import gleam/list
 import gleam/string
 import gleam/yielder
 import vivino/serial/parser.{type Reading}
-import vivino/signal/features.{type SignalFeatures}
+import vivino/signal/features.{type SignalFeatures, type SignalQuality}
 import vivino/signal/learner
 
 /// Print startup header
@@ -78,6 +78,31 @@ pub fn print_gpu(results: List(#(String, Float)), best: String) {
     |> string.join(" ")
 
   io.println("  GPU: " <> sim_str <> " -> " <> best)
+}
+
+/// Print signal quality assessment
+pub fn print_quality(q: SignalQuality) {
+  let indicator = case q.is_good {
+    True -> "[OK]"
+    False -> "[!!]"
+  }
+  io.println(
+    "  Quality: "
+    <> indicator
+    <> " "
+    <> q.reason
+    <> " ("
+    <> fstr(q.score)
+    <> ")",
+  )
+}
+
+/// Print novelty detection info
+pub fn print_novelty(novelty_is_novel: Bool, novelty_score: Float) {
+  case novelty_is_novel {
+    True -> io.println("  [NOVEL] score=" <> fstr(novelty_score))
+    False -> Nil
+  }
 }
 
 /// Print separator

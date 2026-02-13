@@ -1,9 +1,8 @@
 //// Dashboard HTML for the VIVINO real-time bioelectric monitor.
 ////
-//// Contains the complete single-page dashboard with Chart.js graphs,
-//// Three.js phase-space attractor, dual classifier bars (GPU + HDC),
-//// label training buttons, organism selector, and stimulus controls.
-//// All inline — no external files needed.
+//// Zero external dependencies — pure Canvas 2D rendering.
+//// No Chart.js (200KB), no Three.js (647KB), no Google Fonts.
+//// Total JS payload: ~6KB inline vs ~847KB CDN.
 
 /// Returns the complete dashboard HTML page
 pub fn html() -> String {
@@ -17,17 +16,14 @@ fn styles() -> String {
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>VIVINO</title>
-<script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js'></script>
-<script src='https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js'></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
 :root{
   --bg:#0a0a0f;--s1:#11131a;--s2:#1a1d28;
   --b1:#1e2130;--b2:#2a2d40;
   --t1:#e8eaf0;--t2:#8b90a0;--t3:#4a4e60;
   --red:#e53935;--grn:#43a047;--org:#fb8c00;--cyan:#00d4ff;--purple:#ab47bc;
   --dim:#1e2130;
-  --mono:'JetBrains Mono',monospace;
+  --mono:'SF Mono','Cascadia Code','Fira Code','JetBrains Mono','Menlo','Consolas',monospace;
   --card-border:1px solid rgba(30,33,48,.6);
   --card-shadow:0 2px 8px rgba(0,0,0,.3);
 }
@@ -193,6 +189,8 @@ fn body() -> String {
     <div class='right'>
       <span class='dot' id='dot'></span>
       <span id='conn'>--</span>
+      <span id='qInd' style='font-size:.85em;color:var(--grn)' title='Signal Quality'>&#10003;</span>
+      <span id='novelBadge' style='display:none;font-size:.6em;padding:2px 6px;border-radius:3px;background:rgba(251,140,0,.15);color:var(--org);border:1px solid var(--org);letter-spacing:.5px'>NOVEL</span>
       <span id='elapsed'>--:--</span>
       <span id='total'>0</span>
       <span><span id='rate'>--</span>Hz</span>
@@ -314,6 +312,8 @@ fn body() -> String {
         <div class='learn-stat'><div class='ls-name'>TRA</div><div class='ls-val' id='lsT'>0</div></div>
         <div class='learn-stat'><div class='ls-name'>EST</div><div class='ls-val' id='lsSt'>0</div></div>
         <div class='learn-stat'><div class='ls-name'>STR</div><div class='ls-val' id='lsSr'>0</div></div>
+        <div class='learn-stat'><div class='ls-name'>PSEUDO</div><div class='ls-val' id='lsPseudo' style='color:var(--cyan)'>0</div></div>
+        <div class='learn-stat'><div class='ls-name'>REJEIT</div><div class='ls-val' id='lsReject' style='color:var(--org)'>0</div></div>
       </div>
     </div>
 
@@ -336,114 +336,151 @@ fn body() -> String {
 fn scripts() -> String {
   "
 <script>
+'use strict';
 const MAX=400,$=id=>document.getElementById(id);
 let sc=0,lr=Date.now(),total=0,frames=0,lastFps=Date.now();
 
 const SN={RESTING:'REPOUSO',CALM:'CALMO',ACTIVE:'ATIVO',AGITATED:'AGITADO',TRANSITION:'TRANSICAO',STRONG_STIMULUS:'ESTIMULO',STIMULUS:'ESTIMULO',STRESS:'ESTRESSE'};
-const SC={RESTING:'var(--grn)',CALM:'#66bb6a',ACTIVE:'var(--org)',AGITATED:'var(--red)',TRANSITION:'#ab47bc',STRONG_STIMULUS:'var(--red)',STIMULUS:'var(--org)',STRESS:'var(--red)'};
+const SCLR={RESTING:'var(--grn)',CALM:'#66bb6a',ACTIVE:'var(--org)',AGITATED:'var(--red)',TRANSITION:'#ab47bc',STRONG_STIMULUS:'var(--red)',STIMULUS:'var(--org)',STRESS:'var(--red)'};
 const ORG_DISPLAY={shimeji:'H. tessellatus (shimeji)',cannabis:'Cannabis sativa',fungal_generic:'Fungo generico'};
+const CMD_NAMES={H:'Habituacao',F:'Rapida',E:'Explorar',S:'Pulso',X:'Parar'};
 
 // Cached DOM refs
 const _mv=$('mv'),_dev=$('dev'),_std=$('std_card'),_dvdt=$('dvdt_card'),_state=$('state'),
       _elapsed=$('elapsed'),_total=$('total'),_rate=$('rate'),_fps=$('fps'),
       _dot=$('dot'),_conn=$('conn'),_stimStatus=$('stimStatus'),_stimLog=$('stimLog'),
       _organism=$('organism'),_infoOrg=$('infoOrg'),
-      _calFill=$('calFill'),_calText=$('calText');
+      _calFill=$('calFill'),_calText=$('calText'),
+      _qInd=$('qInd'),_novelBadge=$('novelBadge'),
+      _lsPseudo=$('lsPseudo'),_lsReject=$('lsReject');
 
 // GPU classifier bars
 const _gpuKeys=['RESTING','CALM','ACTIVE','TRANSITION','STIMULUS','STRESS'];
 const _gcbEls=[0,1,2,3,4,5].map(i=>$('gcb'+i));
 const _gbfEls=[0,1,2,3,4,5].map(i=>$('gbf'+i));
 const _gpEls=[0,1,2,3,4,5].map(i=>$('gp'+i));
-let _lastGpuBest=-1;
-
-// HDC classifier bars
 const _hcbEls=[0,1,2,3,4,5].map(i=>$('hcb'+i));
 const _hbfEls=[0,1,2,3,4,5].map(i=>$('hbf'+i));
 const _hpEls=[0,1,2,3,4,5].map(i=>$('hp'+i));
-let _lastHdcBest=-1;
-
-// Learning stat elements
+let _gpuBestRef=[-1],_hdcBestRef=[-1];
 const _lsEls={RESTING:$('lsR'),CALM:$('lsC'),ACTIVE:$('lsA'),TRANSITION:$('lsT'),STIMULUS:$('lsSt'),STRESS:$('lsSr')};
 
-// Toast notifications
+// Toast
 function showToast(msg,type){
   const t=document.createElement('div');
-  t.className='toast '+(type||'ok');
-  t.textContent=msg;
-  $('toasts').appendChild(t);
-  setTimeout(()=>t.remove(),3000);
+  t.className='toast '+(type||'ok');t.textContent=msg;
+  $('toasts').appendChild(t);setTimeout(()=>t.remove(),3000);
 }
 
-// Command names
-const CMD_NAMES={H:'Habituacao',F:'Rapida',E:'Explorar',S:'Pulso',X:'Parar'};
+// === CANVAS 2D CHARTS (replaces Chart.js ~200KB) ===
+const mvData=[],dvData=[],mvLabels=[],dvLabels=[];
+let stimEvents=[];
+const _chartMv=$('chartMv'),_chartDv=$('chartDev');
+let _chartMvCtx=_chartMv.getContext('2d'),_chartDvCtx=_chartDv.getContext('2d');
 
-function mkChart(id,label,color,hasZero){
-  const g=$(id).getContext('2d');
-  const grad=g.createLinearGradient(0,0,0,200);
-  grad.addColorStop(0,color+'15');grad.addColorStop(1,'transparent');
-  return new Chart(g,{
-    type:'line',
-    data:{labels:[],datasets:[{label,data:[],borderColor:color,borderWidth:1.2,pointRadius:0,tension:.3,fill:true,backgroundColor:grad}]},
-    options:{responsive:true,maintainAspectRatio:false,animation:false,
-      interaction:{intersect:false,mode:'nearest',axis:'x'},
-      scales:{x:{display:false},y:{
-        grid:{color:ctx=>(hasZero&&ctx.tick.value===0)?'rgba(255,255,255,.1)':'rgba(255,255,255,.03)'},
-        border:{display:false},
-        ticks:{color:'#444',font:{family:\"'JetBrains Mono'\",size:9},maxTicksLimit:5,padding:8,
-          callback:v=>Math.round(v)
-        }
-      }},
-      plugins:{legend:{display:false},
-        tooltip:{backgroundColor:'#11131a',titleFont:{family:\"'JetBrains Mono'\",size:10},
-          titleColor:color,bodyColor:'#8b90a0',bodyFont:{family:\"'JetBrains Mono'\",size:10},
-          cornerRadius:4,padding:{x:8,y:6},borderColor:'#1e2130',borderWidth:1,
-          displayColors:false,callbacks:{label:c=>c.parsed.y.toFixed(1)+' mV'}
-        }
-      }
-    }
-  });
+function sizeCanvas(c){
+  const r=c.parentElement.getBoundingClientRect();
+  const d=Math.min(devicePixelRatio,2);
+  c.width=r.width*d;c.height=r.height*d;
+  return{w:c.width,h:c.height,d};
 }
-const cMv=mkChart('chartMv','Vm','#e53935',false);
-const cDev=mkChart('chartDev','dV','#43a047',true);
 
-let buf=[],rafId=0,lastSlow=0,stimEvents=[];
+function drawChart(c,ctx,data,color,hasZero,stims,labels){
+  const s=sizeCanvas(c);
+  if(!s.w||!s.h)return;
+  const w=s.w,h=s.h,dpr=s.d;
+  ctx.clearRect(0,0,w,h);
+  if(!data.length)return;
 
-// Timeline
+  // Y range with padding
+  let yMin=data[0],yMax=data[0];
+  for(let i=1;i<data.length;i++){if(data[i]<yMin)yMin=data[i];if(data[i]>yMax)yMax=data[i];}
+  const pad=Math.max((yMax-yMin)*.15,2);yMin-=pad;yMax+=pad;
+  const yR=yMax-yMin;if(yR===0)return;
+
+  // Grid (5 lines)
+  ctx.strokeStyle='rgba(255,255,255,.03)';ctx.lineWidth=1;
+  for(let i=0;i<5;i++){const y=Math.round(h*i/4)+.5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
+
+  // Zero line
+  if(hasZero&&yMin<0&&yMax>0){
+    const zy=h-(-yMin/yR)*h;
+    ctx.strokeStyle='rgba(255,255,255,.1)';ctx.beginPath();ctx.moveTo(0,zy);ctx.lineTo(w,zy);ctx.stroke();
+  }
+
+  // Stim markers
+  if(stims&&labels){
+    ctx.strokeStyle='rgba(251,140,0,.6)';ctx.lineWidth=1;ctx.setLineDash([6*dpr,6*dpr]);
+    for(const se of stims){const idx=labels.indexOf(se.label);if(idx<0)continue;const x=idx/(MAX-1)*w;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}
+    ctx.setLineDash([]);
+  }
+
+  // Data line
+  const xS=w/(MAX-1),off=MAX-data.length;
+  ctx.beginPath();
+  for(let i=0;i<data.length;i++){
+    const x=(off+i)*xS,y=h-((data[i]-yMin)/yR)*h;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle=color;ctx.lineWidth=1.5*dpr;ctx.lineJoin='round';ctx.stroke();
+
+  // Gradient fill under line
+  const grad=ctx.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0,color+'18');grad.addColorStop(1,'transparent');
+  ctx.lineTo((off+data.length-1)*xS,h);ctx.lineTo(off*xS,h);ctx.closePath();
+  ctx.fillStyle=grad;ctx.fill();
+
+  // Y-axis labels
+  ctx.fillStyle='#444';ctx.font=(9*dpr)+'px monospace';ctx.textAlign='left';
+  for(let i=0;i<5;i++){
+    const v=yMax-(yR*i/4),yp=h*i/4+12*dpr;
+    ctx.fillText(Math.round(v),4*dpr,yp);
+  }
+}
+
+// === TIMELINE (optimized — throttled redraw) ===
 const TL_MAX=600,tlStates=[];
 const tlColors={RESTING:'#1b5e20',CALM:'#43a047',ACTIVE:'#fb8c00',AGITATED:'#c62828',TRANSITION:'#7b1fa2',STRONG_STIMULUS:'#c62828',STIMULUS:'#e53935',STRESS:'#d32f2f'};
-const tlCanvas=$('timeline'),tlCtx=tlCanvas.getContext('2d');
+const tlCanvas=$('timeline');let tlCtx=tlCanvas.getContext('2d');
+let tlDirty=false;
+
 function drawTimeline(){
-  const w=tlCanvas.width=tlCanvas.offsetWidth*2,h=tlCanvas.height=48;
+  const dpr=Math.min(devicePixelRatio,2);
+  const w=tlCanvas.width=tlCanvas.offsetWidth*dpr,h=tlCanvas.height=48*dpr;
   tlCtx.clearRect(0,0,w,h);if(!tlStates.length)return;
   const step=w/TL_MAX;
   for(let i=0;i<tlStates.length;i++){tlCtx.fillStyle=tlColors[tlStates[i]]||'#181818';tlCtx.fillRect(i*step,0,Math.ceil(step)+1,h);}
+  tlDirty=false;
 }
 
+// === DATA PROCESSING ===
+let buf=[],rafId=0,lastSlow=0;
 function fmtTime(s){const m=Math.floor(s/60),ss=Math.floor(s%60);return String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');}
 
-// Update classifier bars (reusable for GPU and HDC)
 function updateBars(data,keys,cbEls,bfEls,pEls,bestState,lastBestRef){
   const bIdx=keys.indexOf(bestState);
   for(let i=0;i<6;i++){
-    const v=data[keys[i]];
-    const pct=v?(v*100):0;
+    const v=data[keys[i]],pct=v?(v*100):0;
     pEls[i].textContent=v?pct.toFixed(1)+'%':'--';
     bfEls[i].style.width=pct.toFixed(1)+'%';
     bfEls[i].className='cb-fill s'+i;
-    if(bIdx!==lastBestRef[0]){cbEls[i].className=i===bIdx?'cb on':'cb';}
+    if(bIdx!==lastBestRef[0])cbEls[i].className=i===bIdx?'cb on':'cb';
   }
   lastBestRef[0]=bIdx;
 }
 
-let _gpuBestRef=[_lastGpuBest],_hdcBestRef=[_lastHdcBest];
-
 function flush(){
   if(!buf.length){rafId=0;return;}
   const B=buf;buf=[];
-  const md=cMv.data.datasets[0].data,ml=cMv.data.labels;
-  const dd=cDev.data.datasets[0].data,dl=cDev.data.labels;
-  for(const d of B){total++;sc++;const lbl=d.elapsed?d.elapsed.toFixed(2):'';md.push(d.mv);ml.push(lbl);dd.push(d.deviation);dl.push(lbl);if(typeof phaseUpdate==='function')phaseUpdate(d.deviation,d.gpu_state||d.state||'');if(md.length>MAX){md.shift();ml.shift();dd.shift();dl.shift();stimEvents=stimEvents.filter(s=>ml.includes(s.label));}}
+
+  for(const d of B){
+    total++;sc++;
+    const lbl=d.elapsed?d.elapsed.toFixed(2):'';
+    mvData.push(d.mv);mvLabels.push(lbl);
+    dvData.push(d.deviation);dvLabels.push(lbl);
+    if(typeof phaseUpdate==='function')phaseUpdate(d.deviation,d.gpu_state||d.state||'');
+    if(mvData.length>MAX){mvData.shift();mvLabels.shift();dvData.shift();dvLabels.shift();stimEvents=stimEvents.filter(s=>mvLabels.includes(s.label));}
+  }
   const d=B[B.length-1],now=Date.now();
 
   if(now-lr>=1000){_rate.textContent=sc;sc=0;lr=now;}
@@ -451,18 +488,23 @@ function flush(){
   const dv=d.deviation,adv=Math.abs(dv);
   _dev.innerHTML=(dv>=0?'+':'')+dv.toFixed(1)+'<span class=u>mV</span>';
   _dev.style.color=adv>30?'var(--red)':adv>15?'var(--org)':'var(--t1)';
-  if(d.state){const nm=SN[d.state]||d.state,cl=SC[d.state]||'var(--t1)';
+  if(d.state){
+    const nm=SN[d.state]||d.state,cl=SCLR[d.state]||'var(--t1)';
     _state.innerHTML='<span class=pill style=\"color:'+cl+';border-color:'+cl+'\">'+nm+'</span>';
-    tlStates.push(d.state);if(tlStates.length>TL_MAX)tlStates.shift();drawTimeline();}
+    tlStates.push(d.state);if(tlStates.length>TL_MAX)tlStates.shift();tlDirty=true;
+  }
   _elapsed.textContent=fmtTime(d.elapsed);
   _total.textContent=total.toLocaleString('pt-BR');
-  cMv.update('none');cDev.update('none');
 
-  // Update organism display
-  if(d.organism_display){
-    _organism.textContent=d.organism_display;
-    _infoOrg.textContent=d.organism_display;
-  }
+  // Draw charts (Canvas 2D — instant, no library overhead)
+  drawChart(_chartMv,_chartMvCtx,mvData,'#e53935',false,stimEvents,mvLabels);
+  drawChart(_chartDv,_chartDvCtx,dvData,'#43a047',true,stimEvents,dvLabels);
+
+  // Timeline — throttled at 500ms
+  if(tlDirty&&now-lastSlow>=250)drawTimeline();
+
+  // Organism display
+  if(d.organism_display){_organism.textContent=d.organism_display;_infoOrg.textContent=d.organism_display;}
 
   if(now-lastSlow>=500){
     lastSlow=now;
@@ -472,40 +514,32 @@ function flush(){
       _dvdt.innerHTML=f.dvdt_max.toFixed(0)+'<span class=u>mV/s</span>';
       _dvdt.style.color=f.dvdt_max>500?'var(--red)':f.dvdt_max>200?'var(--org)':'var(--t1)';
     }
-    // GPU bars
-    if(d.gpu){updateBars(d.gpu,_gpuKeys,_gcbEls,_gbfEls,_gpEls,d.gpu_state,_gpuBestRef);}
-    // HDC bars
-    if(d.hdc){updateBars(d.hdc,_gpuKeys,_hcbEls,_hbfEls,_hpEls,d.hdc_state,_hdcBestRef);}
-    // Learning stats
+    if(d.gpu)updateBars(d.gpu,_gpuKeys,_gcbEls,_gbfEls,_gpEls,d.gpu_state,_gpuBestRef);
+    if(d.hdc)updateBars(d.hdc,_gpuKeys,_hcbEls,_hbfEls,_hpEls,d.hdc_state,_hdcBestRef);
     if(d.learning){
-      const L=d.learning;
-      const pct=Math.min(100,L.calibration_progress/L.calibration_total*100);
+      const L=d.learning,pct=Math.min(100,L.calibration_progress/L.calibration_total*100);
       _calFill.style.width=pct+'%';
       _calText.textContent=L.calibration_complete?'Calibrado':'Calibracao: '+L.calibration_progress+'/'+L.calibration_total;
-      if(L.exemplars){
-        for(const k in _lsEls){if(L.exemplars[k]!==undefined)_lsEls[k].textContent=L.exemplars[k];}
-      }
+      if(L.exemplars){for(const k in _lsEls){if(L.exemplars[k]!==undefined)_lsEls[k].textContent=L.exemplars[k];}}
+      if(L.rejected!==undefined)_lsReject.textContent=L.rejected;
     }
+    if(d.pseudo_labels!==undefined)_lsPseudo.textContent=d.pseudo_labels;
+    if(d.quality){
+      const q=d.quality;
+      if(q.is_good){_qInd.innerHTML='&#10003;';_qInd.style.color='var(--grn)';_qInd.title='Sinal bom ('+q.score.toFixed(1)+')';}
+      else if(q.reason==='flat_line'){_qInd.innerHTML='&#9644;';_qInd.style.color='var(--t3)';_qInd.title='Sinal flat';}
+      else if(q.reason==='saturated'){_qInd.innerHTML='&#9650;';_qInd.style.color='var(--red)';_qInd.title='Sinal saturado';}
+      else if(q.reason==='artifact'){_qInd.innerHTML='&#9889;';_qInd.style.color='var(--org)';_qInd.title='Artefato detectado';}
+      else{_qInd.innerHTML='&#9888;';_qInd.style.color='var(--org)';_qInd.title='Sinal ruidoso ('+q.score.toFixed(1)+')';}
+    }
+    if(d.novelty){_novelBadge.style.display=d.novelty.is_novel?'inline':'none';}
   }
   frames++;
   if(now-lastFps>=2000){_fps.textContent=Math.round(frames*1e3/(now-lastFps));frames=0;lastFps=now;}
   rafId=0;
 }
 
-// Stimulus markers
-const stimMarkerPlugin={id:'stimMarker',afterDraw(chart){
-  if(!stimEvents.length)return;const xA=chart.scales.x,yA=chart.scales.y;if(!xA||!yA)return;
-  const ctx=chart.ctx,labels=chart.data.labels;
-  for(const se of stimEvents){
-    const idx=labels.indexOf(se.label);if(idx<0)continue;
-    const x=xA.getPixelForValue(idx);
-    ctx.save();ctx.strokeStyle='rgba(251,140,0,0.6)';ctx.lineWidth=1;ctx.setLineDash([3,3]);
-    ctx.beginPath();ctx.moveTo(x,yA.top);ctx.lineTo(x,yA.bottom);ctx.stroke();
-    ctx.setLineDash([]);ctx.restore();
-  }
-}};
-Chart.register(stimMarkerPlugin);
-
+// === STIMULUS ===
 function onStim(d){
   stimEvents.push({label:d.elapsed.toFixed(2),stim_type:d.stim_type,protocol:d.protocol,count:d.count,duration:d.duration});
   if(stimEvents.length>50)stimEvents.shift();
@@ -514,29 +548,20 @@ function onStim(d){
   const log=_stimLog,ev=document.createElement('div');
   ev.textContent=fmtTime(d.elapsed)+' '+d.protocol+' '+d.stim_type+' '+d.duration;
   log.prepend(ev);while(log.children.length>20)log.lastChild.remove();
-  tlStates.push('STIMULUS');if(tlStates.length>TL_MAX)tlStates.shift();drawTimeline();
+  tlStates.push('STIMULUS');if(tlStates.length>TL_MAX)tlStates.shift();tlDirty=true;
 }
 
 function onCmdAck(d){
   const isStop=d.cmd==='X';
   showToast(isStop?'Protocolo parado':'Enviado: '+CMD_NAMES[d.cmd],isStop?'warn':'ok');
-  if(isStop){
-    _stimStatus.textContent='Nenhum protocolo ativo';
-    _stimStatus.className='stim-status';
-    document.querySelectorAll('.stim-btn').forEach(b=>b.classList.remove('active'));
-  }else{
-    _stimStatus.textContent='Protocolo: '+CMD_NAMES[d.cmd];
-    _stimStatus.className='stim-status active';
-    document.querySelectorAll('.stim-btn').forEach(b=>{
-      b.classList.toggle('active',b.dataset.cmd===d.cmd);
-    });
-  }
+  if(isStop){_stimStatus.textContent='Nenhum protocolo ativo';_stimStatus.className='stim-status';document.querySelectorAll('.stim-btn').forEach(b=>b.classList.remove('active'));}
+  else{_stimStatus.textContent='Protocolo: '+CMD_NAMES[d.cmd];_stimStatus.className='stim-status active';document.querySelectorAll('.stim-btn').forEach(b=>{b.classList.toggle('active',b.dataset.cmd===d.cmd);});}
   const log=_stimLog,ev=document.createElement('div');
   ev.textContent=(_elapsed.textContent||'--:--')+' CMD '+CMD_NAMES[d.cmd];
   log.prepend(ev);while(log.children.length>20)log.lastChild.remove();
 }
 
-// === Label + Organism commands ===
+// === COMMANDS ===
 var _ws=null;
 function sendCmd(c){
   if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
@@ -544,98 +569,123 @@ function sendCmd(c){
   const btn=document.querySelector('[data-cmd=\"'+c+'\"]');
   if(btn){btn.classList.add('sending');setTimeout(()=>btn.classList.remove('sending'),300);}
 }
-
 function sendLabel(state){
   if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
-  _ws.send('L:'+state);
-  showToast('Rotulando: '+(SN[state]||state),'ok');
+  _ws.send('L:'+state);showToast('Rotulando: '+(SN[state]||state),'ok');
 }
-
 function sendOrg(org){
   if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
   _ws.send('O:'+org);
 }
-
-function onLabelAck(d){
-  showToast('Rotulado: '+(SN[d.label]||d.label),'ok');
-}
-
+function onLabelAck(d){showToast('Rotulado: '+(SN[d.label]||d.label),'ok');}
 function onOrganismAck(d){
   const name=ORG_DISPLAY[d.organism]||d.organism;
   showToast('Organismo: '+name,'ok');
-  _organism.textContent=name;
-  _infoOrg.textContent=name;
-  document.querySelectorAll('.org-btn').forEach(b=>{
-    b.classList.toggle('active',b.dataset.org===d.organism);
-  });
+  _organism.textContent=name;_infoOrg.textContent=name;
+  document.querySelectorAll('.org-btn').forEach(b=>{b.classList.toggle('active',b.dataset.org===d.organism);});
 }
 
+// === WEBSOCKET ===
 function connect(){
   const ws=new WebSocket('ws://'+location.host+'/ws');_ws=ws;
   ws.onopen=()=>{_dot.className='dot on';_conn.textContent='ON';showToast('Conectado','ok');};
   ws.onclose=()=>{_ws=null;_dot.className='dot';_conn.textContent='OFF';document.querySelectorAll('.stim-btn').forEach(b=>b.classList.remove('active'));setTimeout(connect,2000);};
   ws.onerror=()=>ws.close();
   ws.onmessage=e=>{const d=JSON.parse(e.data);
-    if(d.type==='stim'){onStim(d);}
-    else if(d.type==='cmd_ack'){onCmdAck(d);}
-    else if(d.type==='label_ack'){onLabelAck(d);}
-    else if(d.type==='organism_ack'){onOrganismAck(d);}
+    if(d.type==='stim')onStim(d);
+    else if(d.type==='cmd_ack')onCmdAck(d);
+    else if(d.type==='label_ack')onLabelAck(d);
+    else if(d.type==='organism_ack')onOrganismAck(d);
     else{buf.push(d);if(!rafId)rafId=requestAnimationFrame(flush);}
   };
 }
 connect();
 
-// === PHASE SPACE ATTRACTOR (Takens' delay embedding) ===
+// === PHASE SPACE ATTRACTOR — Canvas 2D (replaces Three.js ~647KB) ===
 (function(){
-if(typeof THREE==='undefined')return;
 var bw=$('blobWrap'),bc=$('blob3d');if(!bw||!bc)return;
-var scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(50,1,.1,100);
-cam.position.set(3,2,3);cam.lookAt(0,0,0);
-var ren=new THREE.WebGLRenderer({canvas:bc,alpha:true,antialias:true});
-ren.setPixelRatio(Math.min(devicePixelRatio,1.5));ren.setClearColor(0,0);
+var ctx=bc.getContext('2d');
 var TAU=5,BUF=400,TRAIL=200;
-var ring=new Float32Array(BUF),ri=0,rc=0;
-var tP=new Float32Array(TRAIL*3),tC=new Float32Array(TRAIL*3);
-var tG=new THREE.BufferGeometry();
-tG.setAttribute('position',new THREE.BufferAttribute(tP,3));
-tG.setAttribute('color',new THREE.BufferAttribute(tC,3));
-var trail=new THREE.Line(tG,new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity:.85}));
-scene.add(trail);
-var dM=new THREE.MeshBasicMaterial({color:0x43a047,transparent:true,opacity:.9});
-var dot=new THREE.Mesh(new THREE.SphereGeometry(.06,10,10),dM);dot.visible=false;scene.add(dot);
-var gM=new THREE.MeshBasicMaterial({color:0x43a047,transparent:true,opacity:.2});
-var glow=new THREE.Mesh(new THREE.SphereGeometry(.15,10,10),gM);glow.visible=false;scene.add(glow);
-var aM=new THREE.LineBasicMaterial({color:0x1a1a1a,transparent:true,opacity:.5});
-[[2,0,0],[0,2,0],[0,0,2]].forEach(function(p){
-  var g=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-p[0],-p[1],-p[2]),new THREE.Vector3(p[0],p[1],p[2])]);
-  scene.add(new THREE.Line(g,aM));
-});
-var mxA=10;
-var SC={RESTING:[.26,.63,.28],CALM:[.4,.73,.42],ACTIVE:[.98,.55,0],AGITATED:[.9,.16,.16],TRANSITION:[.67,.28,.74],STIMULUS:[.9,.22,.21],STRONG_STIMULUS:[.9,.22,.21],STRESS:[.83,.18,.18]};
-var cR=[.26,.63,.28],tR=[.26,.63,.28];
-function onR(){var w=bw.clientWidth,h=bw.clientHeight;if(w>0&&h>0){ren.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix();}}
-addEventListener('resize',onR);setTimeout(onR,80);
+var ring=new Float32Array(BUF),ri=0,rc=0,mxA=10;
 var rot=0,lf=0;
-function anim(ts){requestAnimationFrame(anim);if(ts-lf<33)return;lf=ts;
+
+var SC={RESTING:[66,160,71],CALM:[102,187,106],ACTIVE:[251,140,0],AGITATED:[229,57,53],
+  TRANSITION:[171,71,188],STIMULUS:[229,57,53],STRONG_STIMULUS:[229,57,53],STRESS:[211,47,47]};
+var cR=[66,160,71],tR=[66,160,71];
+
+function onR(){
+  var dpr=Math.min(devicePixelRatio,1.5);
+  bc.width=bw.clientWidth*dpr;bc.height=bw.clientHeight*dpr;
+}
+addEventListener('resize',onR);setTimeout(onR,80);
+
+function anim(ts){
+  requestAnimationFrame(anim);
+  if(ts-lf<33)return;lf=ts;
+  onR();
+  var w=bc.width,h=bc.height;if(!w||!h)return;
+  ctx.clearRect(0,0,w,h);
+
+  // Lerp state color
   cR[0]+=(tR[0]-cR[0])*.08;cR[1]+=(tR[1]-cR[1])*.08;cR[2]+=(tR[2]-cR[2])*.08;
-  rot+=.004;var r=4.5;
-  cam.position.x=Math.sin(rot)*r;cam.position.z=Math.cos(rot)*r;cam.position.y=1.5+Math.sin(rot*.3)*.8;
-  cam.lookAt(0,0,0);
-  if(rc>=TAU*2+1){
-    var cnt=Math.min(TRAIL,rc-TAU*2),sc=2/Math.max(mxA,1);
-    for(var i=0;i<cnt;i++){
-      var idx=(ri-cnt+i+BUF)%BUF;
-      tP[i*3]=ring[idx]*sc;tP[i*3+1]=ring[(idx-TAU+BUF)%BUF]*sc;tP[i*3+2]=ring[(idx-TAU*2+BUF)%BUF]*sc;
-      var a=i/cnt;a*=a;
-      tC[i*3]=cR[0]*(.05+a*.95);tC[i*3+1]=cR[1]*(.05+a*.95);tC[i*3+2]=cR[2]*(.05+a*.95);
+
+  rot+=.004;
+  var cosR=Math.cos(rot),sinR=Math.sin(rot);
+  var camY=1.5+Math.sin(rot*.3)*.8,camR=4.5;
+  var fov=Math.min(w,h)*.45;
+
+  // Draw axes
+  ctx.strokeStyle='rgba(40,40,50,.5)';ctx.lineWidth=1;
+  var axPts=[[-2,0,0],[2,0,0],[0,-2,0],[0,2,0],[0,0,-2],[0,0,2]];
+  for(var ai=0;ai<6;ai+=2){
+    var pts=[];
+    for(var aj=ai;aj<ai+2;aj++){
+      var ax=axPts[aj][0],ay=axPts[aj][1],az=axPts[aj][2];
+      var rx=ax*cosR+az*sinR,rz=-ax*sinR+az*cosR;
+      var cy=ay-camY,cz=camR-rz;
+      if(cz<.5)continue;
+      pts.push([w/2+rx*fov/cz, h/2+cy*fov/cz]);
     }
-    tG.setDrawRange(0,cnt);tG.attributes.position.needsUpdate=true;tG.attributes.color.needsUpdate=true;
-    if(cnt>0){var li=(cnt-1)*3;dot.position.set(tP[li],tP[li+1],tP[li+2]);dot.visible=true;
-      dM.color.setRGB(cR[0],cR[1],cR[2]);glow.position.copy(dot.position);glow.visible=true;gM.color.setRGB(cR[0],cR[1],cR[2]);}
-  }else{dot.visible=false;glow.visible=false;tG.setDrawRange(0,0);}
-  ren.render(scene,cam);
+    if(pts.length===2){ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);ctx.lineTo(pts[1][0],pts[1][1]);ctx.stroke();}
+  }
+
+  if(rc<TAU*2+1){return;}
+  var cnt=Math.min(TRAIL,rc-TAU*2),sc=2/Math.max(mxA,1);
+
+  // Draw trail segments with fading color
+  var prevSx,prevSy;
+  for(var i=0;i<cnt;i++){
+    var idx=(ri-cnt+i+BUF)%BUF;
+    var px=ring[idx]*sc,py=ring[(idx-TAU+BUF)%BUF]*sc,pz=ring[(idx-TAU*2+BUF)%BUF]*sc;
+    // Rotate around Y (camera orbit)
+    var rx=px*cosR+pz*sinR,rz=-px*sinR+pz*cosR;
+    var cy=py-camY,cz=camR-rz;
+    if(cz<.5){prevSx=undefined;continue;}
+    var sx=w/2+rx*fov/cz,sy=h/2+cy*fov/cz;
+    if(i>0&&prevSx!==undefined){
+      var a=i/cnt;a*=a;
+      var cr=Math.round(cR[0]*(.05+a*.95)),cg=Math.round(cR[1]*(.05+a*.95)),cb2=Math.round(cR[2]*(.05+a*.95));
+      ctx.strokeStyle='rgba('+cr+','+cg+','+cb2+','+(a*.85).toFixed(2)+')';
+      ctx.lineWidth=1+a*2;
+      ctx.beginPath();ctx.moveTo(prevSx,prevSy);ctx.lineTo(sx,sy);ctx.stroke();
+    }
+    prevSx=sx;prevSy=sy;
+  }
+
+  // Current point — dot + glow
+  if(cnt>0&&prevSx!==undefined){
+    var r=Math.round(cR[0]),g=Math.round(cR[1]),b=Math.round(cR[2]);
+    // Glow
+    var grad=ctx.createRadialGradient(prevSx,prevSy,0,prevSx,prevSy,20);
+    grad.addColorStop(0,'rgba('+r+','+g+','+b+',.5)');grad.addColorStop(1,'transparent');
+    ctx.fillStyle=grad;ctx.beginPath();ctx.arc(prevSx,prevSy,20,0,6.283);ctx.fill();
+    // Dot
+    ctx.fillStyle='rgb('+r+','+g+','+b+')';
+    ctx.beginPath();ctx.arc(prevSx,prevSy,5,0,6.283);ctx.fill();
+  }
 }
 requestAnimationFrame(anim);
+
 window.phaseUpdate=function(dev,state){
   ring[ri]=dev;ri=(ri+1)%BUF;rc++;
   var a=Math.abs(dev);if(a>mxA)mxA=a;else mxA+=(Math.max(a,5)-mxA)*.001;
