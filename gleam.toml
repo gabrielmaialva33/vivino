@@ -12,7 +12,7 @@ mist = ">= 5.0.0 and < 6.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
 gleam_yielder = ">= 1.0.0 and < 2.0.0"
 logging = ">= 1.0.0 and < 2.0.0"
-viva_tensor = { path = "/home/gabriel-maia/Documentos/viva_tensor" }
+viva_tensor = { path = "../viva_tensor" }
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
