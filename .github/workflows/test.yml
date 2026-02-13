@@ -93,9 +93,25 @@ jobs:
           echo 'libcudart.so.13 { global: *; };' > /tmp/cuda.map
           gcc -shared -Wl,-soname,libcudart.so.13 -Wl,--version-script=/tmp/cuda.map \
               -o /tmp/libcudart.so.13 /tmp/cuda_stubs.c
-          # cusparseLt stub
-          echo 'void cusparseLtInit(void) {}' | \
-              gcc -shared -Wl,-soname,libcusparseLt.so.0 -x c - -o /tmp/libcusparseLt.so.0
+          # cusparseLt stub — export all symbols the NIF references
+          cat > /tmp/cusparselt_stubs.c << 'CSEOF'
+          #include <stddef.h>
+          int cusparseLtInit(void* h) { return 0; }
+          int cusparseLtDenseDescriptorInit(void* h, void* d, int r, int c, int ld, int a, int t, int o) { return 0; }
+          int cusparseLtStructuredDescriptorInit(void* h, void* d, int r, int c, int ld, int a, int t, int o, int s) { return 0; }
+          int cusparseLtMatmulDescriptorInit(void* h, void* d, int o, void* a, void* b, void* c, void* e, int ct) { return 0; }
+          int cusparseLtMatmulAlgSelectionInit(void* h, void* a, void* d, int al) { return 0; }
+          int cusparseLtMatmulPlanInit(void* h, void* p, void* d, void* a) { return 0; }
+          int cusparseLtMatmulPlanDestroy(void* p) { return 0; }
+          int cusparseLtMatmul(void* h, void* p, void* a, void* b, void* c, void* d, void* e, void* w, void** s, int n) { return 0; }
+          int cusparseLtMatmulGetWorkspace(void* h, void* p, size_t* s) { if(s) *s = 0; return 0; }
+          int cusparseLtMatmulSearch(void* h, void* p, void* a, void* b, void* c, void* d, void* w, void** s, int n) { return 0; }
+          int cusparseLtSpMMACompressedSize2(void* h, void* d, size_t* s, size_t* s2) { if(s) *s = 0; if(s2) *s2 = 0; return 0; }
+          int cusparseLtSpMMACompress2(void* h, void* d, int c, void* a, void* b, void* e, void* s) { return 0; }
+          int cusparseLtMatmulAlgSetAttribute(void* h, void* a, int at, void* d, size_t s) { return 0; }
+          int cusparseLtDestroy(void* h) { return 0; }
+          CSEOF
+          gcc -shared -Wl,-soname,libcusparseLt.so.0 -o /tmp/libcusparseLt.so.0 /tmp/cusparselt_stubs.c
           sudo cp /tmp/libcudart.so.13 /tmp/libcusparseLt.so.0 /usr/lib/x86_64-linux-gnu/
           sudo ldconfig
           echo "CUDA stubs installed with version definition:"
