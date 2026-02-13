@@ -3,9 +3,13 @@ import gleam/int
 import gleam/list
 import gleeunit
 import vivino/serial/parser
+import vivino/signal/dynamic_gpu
 import vivino/signal/features
 import vivino/signal/gpu
 import vivino/signal/hdc
+import vivino/signal/label_bridge
+import vivino/signal/learner
+import vivino/signal/profile
 
 pub fn main() -> Nil {
   gleeunit.main()
@@ -51,7 +55,9 @@ pub fn parse_too_few_fields_test() {
 pub fn parse_line_data_test() {
   let line = parser.parse_line("10.50,500,666.00,0.50")
   case line {
-    parser.DataLine(r) -> { let assert True = r.mv == 666.0 }
+    parser.DataLine(r) -> {
+      let assert True = r.mv == 666.0
+    }
     _ -> panic as "Expected DataLine"
   }
 }
@@ -59,7 +65,9 @@ pub fn parse_line_data_test() {
 pub fn parse_line_stim_test() {
   let line = parser.parse_line("STIM,5.0,HABIT,3,PULSE,50ms")
   case line {
-    parser.StimLine(s) -> { let assert True = s.protocol == "HABIT" }
+    parser.StimLine(s) -> {
+      let assert True = s.protocol == "HABIT"
+    }
     _ -> panic as "Expected StimLine"
   }
 }
@@ -122,8 +130,8 @@ fn int_to_float(i: Int) -> Float {
   case i {
     0 -> 0.0
     _ -> {
-      let assert Ok(f) = float.parse(
-        case i >= 0 {
+      let assert Ok(f) =
+        float.parse(case i >= 0 {
           True -> {
             let s = int_to_string_simple(i)
             s <> ".0"
@@ -132,8 +140,7 @@ fn int_to_float(i: Int) -> Float {
             let s = int_to_string_simple(-1 * i)
             "-" <> s <> ".0"
           }
-        },
-      )
+        })
       f
     }
   }
@@ -191,8 +198,8 @@ pub fn features_spike_detection_test() {
 pub fn features_dimension_test() {
   // Use varying signal to avoid numerical edge cases
   let devs = [
-    0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0, 5.0, -5.0, 4.0, -4.0,
-    3.0, -3.0, 2.0, -2.0, 1.0, -1.0, 0.0,
+    0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0, 5.0, -5.0, 4.0, -4.0, 3.0,
+    -3.0, 2.0, -2.0, 1.0, -1.0, 0.0,
   ]
   let readings = make_readings(devs)
   let f = features.extract(readings)
@@ -205,8 +212,7 @@ pub fn features_classify_state_test() {
   let f = features.extract(readings)
   let state = features.classify_state(f)
   // Flat signal should be RESTING
-  let assert True =
-    state == "RESTING" || state == "CALM"
+  let assert True = state == "RESTING" || state == "CALM"
 }
 
 // ============================================================
@@ -235,8 +241,8 @@ pub fn gpu_classify_stimulus_test() {
   let assert Ok(g) = gpu.init()
   // Create a high-energy spike signal
   let devs = [
-    0.0, 0.0, 0.0, 5.0, 20.0, 50.0, 80.0, 60.0, 30.0, 10.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 5.0, 20.0, 50.0, 80.0, 60.0, 30.0, 10.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
   ]
   let readings = make_readings(devs)
   let f = features.extract(readings)
@@ -292,4 +298,229 @@ pub fn hdc_state_to_string_test() {
   let assert True = hdc.state_to_string(hdc.Stimulus) == "STIMULUS"
   let assert True = hdc.state_to_string(hdc.Stress) == "STRESS"
   let assert True = hdc.state_to_string(hdc.Unknown) == "???"
+}
+
+// ============================================================
+// Profile tests
+// ============================================================
+
+pub fn profile_shimeji_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let assert True = prof.name == "shimeji"
+  let assert True = prof.organism == profile.Shimeji
+  let assert True = list.length(prof.gpu_prototypes) == 6
+  let assert True = list.length(prof.gpu_bounds) == 19
+}
+
+pub fn profile_cannabis_test() {
+  let prof = profile.get_profile(profile.Cannabis)
+  let assert True = prof.name == "cannabis"
+  // Cannabis has wider ranges than shimeji
+  let assert True = prof.quant_ranges.mean_max >. 100.0
+  let assert True = prof.thresholds.resting_std_max >. 5.0
+}
+
+pub fn profile_fungal_test() {
+  let prof = profile.get_profile(profile.FungalGeneric)
+  let assert True = prof.name == "fungal_generic"
+  let assert True = prof.display_name == "Fungo generico"
+}
+
+pub fn profile_parse_organism_test() {
+  let assert Ok(profile.Shimeji) = profile.parse_organism("shimeji")
+  let assert Ok(profile.Cannabis) = profile.parse_organism("cannabis")
+  let assert Ok(profile.FungalGeneric) = profile.parse_organism("fungal")
+  let assert Ok(profile.FungalGeneric) = profile.parse_organism("fungo")
+  let assert Error(_) = profile.parse_organism("banana")
+}
+
+pub fn profile_prototypes_19_features_test() {
+  // Each prototype vector should have 19 elements
+  let prof = profile.get_profile(profile.Shimeji)
+  list.each(prof.gpu_prototypes, fn(p) {
+    let assert True = list.length(p) == 19
+  })
+}
+
+// ============================================================
+// Dynamic GPU tests
+// ============================================================
+
+pub fn dynamic_gpu_init_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let assert Ok(_) = dynamic_gpu.init(prof)
+}
+
+pub fn dynamic_gpu_classify_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let assert Ok(g) = dynamic_gpu.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let #(state, sims) = dynamic_gpu.classify(g, f)
+  let assert True = state != "???"
+  let assert True = list.length(sims) == 6
+  // Probabilities should sum to ~1.0
+  let sum = list.fold(sims, 0.0, fn(acc, s) { acc +. s.1 })
+  let assert True = sum >. 0.99 && sum <. 1.01
+}
+
+pub fn dynamic_gpu_learn_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let assert Ok(g) = dynamic_gpu.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  // Learn should not crash
+  let g2 = dynamic_gpu.learn(g, f, "RESTING")
+  // Classify after learning should still work
+  let #(state, _) = dynamic_gpu.classify(g2, f)
+  let assert True = state != "???"
+}
+
+pub fn dynamic_gpu_cannabis_profile_test() {
+  let prof = profile.get_profile(profile.Cannabis)
+  let assert Ok(g) = dynamic_gpu.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let #(_, sims) = dynamic_gpu.classify(g, f)
+  let assert True = list.length(sims) == 6
+}
+
+// ============================================================
+// Learner (Dynamic HDC) tests
+// ============================================================
+
+pub fn learner_init_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let _mem = learner.init(prof)
+  Nil
+}
+
+pub fn learner_encode_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let _hv = learner.encode(mem, f, prof.quant_ranges)
+  Nil
+}
+
+pub fn learner_classify_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  let #(state, sims) = learner.classify(mem, hv)
+  let state_str = learner.state_to_string(state)
+  let assert True = state_str != ""
+  let assert True = list.length(sims) == 6
+}
+
+pub fn learner_learn_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  // Learn RESTING
+  let mem2 = learner.learn(mem, hv, learner.Resting, 1.0)
+  // Should have 1 exemplar
+  let counts = learner.exemplar_counts(mem2)
+  let resting_count = list.find(counts, fn(c) { c.0 == learner.Resting })
+  let assert Ok(#(_, count)) = resting_count
+  let assert True = count == 1
+}
+
+pub fn learner_auto_calibrate_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  // Calibrate at sample 0 (should add RESTING)
+  let mem2 = learner.auto_calibrate(mem, hv, 0, 0.0)
+  let counts = learner.exemplar_counts(mem2)
+  let resting_count = list.find(counts, fn(c) { c.0 == learner.Resting })
+  let assert Ok(#(_, count)) = resting_count
+  let assert True = count == 1
+  // Calibrate at sample 5 (not multiple of 10, should NOT add)
+  let mem3 = learner.auto_calibrate(mem2, hv, 5, 0.25)
+  let counts3 = learner.exemplar_counts(mem3)
+  let resting_count3 = list.find(counts3, fn(c) { c.0 == learner.Resting })
+  let assert Ok(#(_, count3)) = resting_count3
+  let assert True = count3 == 1
+}
+
+pub fn learner_state_parse_test() {
+  let assert Ok(learner.Resting) = learner.parse_state("RESTING")
+  let assert Ok(learner.Calm) = learner.parse_state("CALM")
+  let assert Ok(learner.Active) = learner.parse_state("ACTIVE")
+  let assert Ok(learner.Transition) = learner.parse_state("TRANSITION")
+  let assert Ok(learner.Stimulus) = learner.parse_state("STIMULUS")
+  let assert Ok(learner.Stress) = learner.parse_state("STRESS")
+  let assert Error(_) = learner.parse_state("INVALID")
+}
+
+pub fn learner_ring_buffer_test() {
+  let prof = profile.get_profile(profile.Shimeji)
+  let mem = learner.init(prof)
+  let readings = make_readings(list.repeat(0.0, 20))
+  let f = features.extract(readings)
+  let hv = learner.encode(mem, f, prof.quant_ranges)
+  // Add 6 RESTING exemplars (max is 5, oldest should be dropped)
+  let mem2 = learner.learn(mem, hv, learner.Resting, 1.0)
+  let mem3 = learner.learn(mem2, hv, learner.Resting, 2.0)
+  let mem4 = learner.learn(mem3, hv, learner.Resting, 3.0)
+  let mem5 = learner.learn(mem4, hv, learner.Resting, 4.0)
+  let mem6 = learner.learn(mem5, hv, learner.Resting, 5.0)
+  let mem7 = learner.learn(mem6, hv, learner.Resting, 6.0)
+  let counts = learner.exemplar_counts(mem7)
+  let resting_count = list.find(counts, fn(c) { c.0 == learner.Resting })
+  let assert Ok(#(_, count)) = resting_count
+  let assert True = count == 5
+}
+
+// ============================================================
+// Label bridge tests
+// ============================================================
+
+pub fn label_bridge_put_get_test() {
+  let assert Ok(_) = label_bridge.put_label("RESTING")
+  let assert Ok(label) = label_bridge.get_label()
+  let assert True = label == "RESTING"
+  // Second get should return Error (consumed)
+  let assert Error(_) = label_bridge.get_label()
+}
+
+pub fn label_bridge_organism_test() {
+  let assert Ok(_) = label_bridge.put_organism("cannabis")
+  let assert Ok(org) = label_bridge.get_organism()
+  let assert True = org == "cannabis"
+}
+
+// ============================================================
+// Cross-profile classification test
+// ============================================================
+
+pub fn cross_profile_gpu_test() {
+  // Same signal should produce different results on different profiles
+  let devs = [
+    0.0, 5.0, 10.0, 15.0, 20.0, 15.0, 10.0, 5.0, 0.0, -5.0, -10.0, -5.0, 0.0,
+    3.0, 6.0, 3.0, 0.0, -3.0, -6.0, -3.0,
+  ]
+  let readings = make_readings(devs)
+  let f = features.extract(readings)
+
+  let shimeji_prof = profile.get_profile(profile.Shimeji)
+  let cannabis_prof = profile.get_profile(profile.Cannabis)
+
+  let assert Ok(g_shi) = dynamic_gpu.init(shimeji_prof)
+  let assert Ok(g_can) = dynamic_gpu.init(cannabis_prof)
+
+  let #(state_shi, _) = dynamic_gpu.classify(g_shi, f)
+  let #(state_can, _) = dynamic_gpu.classify(g_can, f)
+
+  // Both should produce valid states (may or may not differ)
+  let assert True = state_shi != "???"
+  let assert True = state_can != "???"
 }
