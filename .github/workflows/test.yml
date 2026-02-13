@@ -54,6 +54,15 @@ jobs:
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
           sudo apt-get install -y libcudart12 libcusparselt0 2>/dev/null || true
+          # NIF links against libcudart.so.13 — create symlink from .12
+          CUDART=$(find /usr -name 'libcudart.so.12*' 2>/dev/null | head -1)
+          if [ -n "$CUDART" ]; then
+            sudo ln -sf "$CUDART" "$(dirname $CUDART)/libcudart.so.13"
+          fi
+          CUSPARSE=$(find /usr -name 'libcusparseLt.so.0*' 2>/dev/null | head -1)
+          if [ -n "$CUSPARSE" ]; then
+            sudo ln -sf "$CUSPARSE" "$(dirname $CUSPARSE)/libcusparseLt.so.0"
+          fi
           sudo ldconfig
 
       - run: gleam deps download
