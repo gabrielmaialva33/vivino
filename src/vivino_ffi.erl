@@ -27,22 +27,15 @@ read_line_unsafe() ->
 %% Open serial port via Erlang port (low-latency).
 %% Uses stty for configuration + spawn_executable for safety.
 open_serial(Device, Baud) ->
-    DevStr = binary_to_list(Device),
     BaudStr = integer_to_list(Baud),
-    %% Configure port: raw mode, no echo, immediate flush (min 1 time 0)
-    SttyCmd = "stty -F " ++ DevStr ++ " " ++ BaudStr ++
-        " raw -echo -echoe -echok -echoctl -echoke"
-        " min 1 time 0 -hupcl 2>/dev/null",
-    os:cmd(SttyCmd),
-    timer:sleep(200),
-    %% Flush any stale data from the port buffer
-    os:cmd("cat " ++ DevStr ++ " > /dev/null &"),
-    timer:sleep(50),
-    os:cmd("kill %1 2>/dev/null"),
-    %% Open as Erlang port with spawn_executable for safety (no shell injection)
+    %% Use Python serial reader — handles DTR properly for CH340/Arduino
+    %% Python sets DTR=False to prevent Arduino reset, filters ASCII, flushes garbage
+    PrivDir = code:priv_dir(vivino),
+    ReaderPath = filename:join(PrivDir, "serial_reader.py"),
     Port = open_port(
-        {spawn_executable, "/usr/bin/cat"},
-        [{args, [DevStr]}, binary, {line, 1024}, exit_status, use_stdio]
+        {spawn_executable, "/usr/bin/python3"},
+        [{args, [ReaderPath, binary_to_list(Device), BaudStr]},
+         binary, {line, 1024}, exit_status, use_stdio]
     ),
     %% Store device path for write_serial
     persistent_term:put(vivino_serial_device, Device),
@@ -56,16 +49,30 @@ read_port_line(Port) ->
         {Port, {data, {eol, Line}}} ->
             %% Trim CR if present
             Trimmed = binary:replace(Line, <<"\r">>, <<>>),
-            {ok, Trimmed};
+            %% Skip non-ASCII/binary garbage (bootloader noise)
+            case is_printable_ascii(Trimmed) of
+                true -> {ok, Trimmed};
+                false -> read_port_line(Port)
+            end;
         {Port, {data, {noeol, Line}}} ->
-            %% Partial line (longer than 1024 bytes), return as-is
             Trimmed = binary:replace(Line, <<"\r">>, <<>>),
-            {ok, Trimmed};
+            case is_printable_ascii(Trimmed) of
+                true -> {ok, Trimmed};
+                false -> read_port_line(Port)
+            end;
         {Port, {exit_status, _Status}} ->
             {error, nil}
     after 10000 ->
         {error, nil}
     end.
+
+%% Check if binary contains only printable ASCII (0x20-0x7E) + common chars
+is_printable_ascii(<<>>) -> true;
+is_printable_ascii(<<C, Rest/binary>>) when C >= 32, C =< 126 ->
+    is_printable_ascii(Rest);
+is_printable_ascii(<<$\t, Rest/binary>>) ->
+    is_printable_ascii(Rest);
+is_printable_ascii(_) -> false.
 
 %% Write data directly to serial device (for sending commands to Arduino).
 %% Opens device file for writing, sends data + newline, closes.
@@ -92,9 +99,9 @@ detect_port() ->
 detect_port([]) ->
     {error, nil};
 detect_port([Port | Rest]) ->
-    case filelib:is_file(Port) of
-        true -> {ok, unicode:characters_to_binary(Port)};
-        false -> detect_port(Rest)
+    case file:read_file_info(Port) of
+        {ok, _} -> {ok, unicode:characters_to_binary(Port)};
+        _ -> detect_port(Rest)
     end.
 
 %% Monotonic timestamp in milliseconds (for latency measurement)
