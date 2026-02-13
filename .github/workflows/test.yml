@@ -59,10 +59,10 @@ jobs:
       - run: gleam deps download
       - run: gleam build
 
-      - name: Link NIF into build tree
+      - name: Ensure NIF in build tree
         run: |
           mkdir -p build/dev/erlang/viva_tensor/priv
-          cp ../viva_tensor/priv/viva_tensor_zig.so build/dev/erlang/viva_tensor/priv/
+          cp -n ../viva_tensor/priv/viva_tensor_zig.so build/dev/erlang/viva_tensor/priv/ 2>/dev/null || true
           ls -la build/dev/erlang/viva_tensor/priv/
 
       - run: gleam test
