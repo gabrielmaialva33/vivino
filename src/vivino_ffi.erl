@@ -161,7 +161,8 @@ send_serial_cmd(Cmd) ->
 tcp_connect(Host, Port) ->
     case gen_tcp:connect(binary_to_list(Host), Port,
                          [binary, {packet, line}, {active, false},
-                          {nodelay, true}], 5000) of
+                          {nodelay, true}, {recbuf, 65536},
+                          {sndbuf, 65536}], 5000) of
         {ok, Socket} -> {ok, Socket};
         {error, _Reason} -> {error, nil}
     end.
