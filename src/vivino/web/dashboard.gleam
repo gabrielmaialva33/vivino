@@ -1,11 +1,16 @@
 //// Dashboard HTML for the VIVINO real-time bioelectric monitor.
 ////
 //// Contains the complete single-page dashboard with Chart.js graphs,
-//// Three.js phase-space attractor, classifier bars, and stimulus controls.
+//// Three.js phase-space attractor, dual classifier bars (GPU + HDC),
+//// label training buttons, organism selector, and stimulus controls.
 //// All inline — no external files needed.
 
 /// Returns the complete dashboard HTML page
 pub fn html() -> String {
+  styles() <> body() <> scripts()
+}
+
+fn styles() -> String {
   "<!DOCTYPE html>
 <html lang='pt-BR'>
 <head>
@@ -20,7 +25,7 @@ pub fn html() -> String {
   --bg:#0a0a0f;--s1:#11131a;--s2:#1a1d28;
   --b1:#1e2130;--b2:#2a2d40;
   --t1:#e8eaf0;--t2:#8b90a0;--t3:#4a4e60;
-  --red:#e53935;--grn:#43a047;--org:#fb8c00;--cyan:#00d4ff;
+  --red:#e53935;--grn:#43a047;--org:#fb8c00;--cyan:#00d4ff;--purple:#ab47bc;
   --dim:#1e2130;
   --mono:'JetBrains Mono',monospace;
   --card-border:1px solid rgba(30,33,48,.6);
@@ -68,6 +73,8 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
 
 /* Classifier horizontal bars */
 .cls{background:var(--s1);border-radius:8px;padding:10px 14px;flex-shrink:0;border:var(--card-border);box-shadow:var(--card-shadow)}
+.cls-row{display:grid;grid-template-columns:1fr 1fr;gap:0 24px}
+.cls-half{display:flex;flex-direction:column;gap:2px}
 .cls-title{font-size:.6em;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:8px}
 .cls-bars{display:grid;grid-template-columns:1fr 1fr;gap:3px 16px}
 .cb{display:grid;grid-template-columns:80px 1fr 48px;align-items:center;gap:8px;height:20px;transition:opacity .2s}
@@ -85,13 +92,13 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
 .cb-fill.s5{background:linear-gradient(90deg,#c62828,#ef5350)}
 
 /* Bottom row */
-.bottom{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex-shrink:0}
-.stim{background:var(--s1);border-radius:8px;padding:12px 14px;border:var(--card-border);box-shadow:var(--card-shadow)}
-.stim .title{font-size:.6em;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:8px}
+.bottom{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;flex-shrink:0}
+.card{background:var(--s1);border-radius:8px;padding:12px 14px;border:var(--card-border);box-shadow:var(--card-shadow)}
+.card .title{font-size:.6em;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:8px}
 .stim-btns{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end}
 .btn-group{display:flex;flex-direction:column;gap:4px}
 .btn-group-label{font-size:.55em;color:var(--t3);letter-spacing:1px;text-transform:uppercase;padding-left:2px}
-.btn-group-row{display:flex;gap:6px}
+.btn-group-row{display:flex;gap:6px;flex-wrap:wrap}
 .stim-btn{background:rgba(255,255,255,.02);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:8px 16px;font-family:var(--mono);font-size:.75em;cursor:pointer;transition:all .2s ease;position:relative;overflow:hidden}
 .stim-btn:hover{border-color:var(--cyan);color:var(--cyan);background:rgba(0,212,255,.05)}
 .stim-btn:active{transform:scale(.96)}
@@ -110,6 +117,26 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
 @keyframes btnPulseRed{0%{box-shadow:0 0 0 0 rgba(229,57,53,.4)}100%{box-shadow:0 0 0 14px rgba(229,57,53,0)}}
 .stim-status{font-size:.75em;color:var(--t3);transition:color .3s}.stim-status.active{color:var(--cyan)}
 .stim-log{max-height:50px;overflow-y:auto;font-size:.65em;color:var(--t3);line-height:1.8}
+
+/* Label buttons */
+.lbl-btn{background:rgba(255,255,255,.02);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:6px 12px;font-family:var(--mono);font-size:.7em;cursor:pointer;transition:all .2s ease}
+.lbl-btn:hover{border-color:var(--purple);color:var(--purple);background:rgba(171,71,188,.05)}
+.lbl-btn:active{transform:scale(.96)}
+.lbl-btn.sending{animation:btnPulsePurple .3s ease}
+@keyframes btnPulsePurple{0%{box-shadow:0 0 0 0 rgba(171,71,188,.4)}100%{box-shadow:0 0 0 14px rgba(171,71,188,0)}}
+
+/* Organism selector */
+.org-btn{background:rgba(255,255,255,.02);border:1px solid var(--b1);color:var(--t2);border-radius:6px;padding:6px 12px;font-family:var(--mono);font-size:.7em;cursor:pointer;transition:all .2s ease}
+.org-btn:hover{border-color:var(--cyan);color:var(--cyan);background:rgba(0,212,255,.05)}
+.org-btn.active{border-color:var(--cyan);color:var(--cyan);background:rgba(0,212,255,.08)}
+
+/* Learning stats */
+.learn-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:8px}
+.learn-stat{text-align:center;padding:4px;background:rgba(255,255,255,.02);border-radius:4px}
+.learn-stat .ls-name{font-size:.55em;color:var(--t3);letter-spacing:.5px;text-transform:uppercase}
+.learn-stat .ls-val{font-size:.85em;font-weight:700;color:var(--t2)}
+.cal-bar{height:4px;background:rgba(255,255,255,.03);border-radius:2px;margin-top:6px;overflow:hidden}
+.cal-fill{height:100%;background:var(--cyan);border-radius:2px;transition:width .3s ease}
 
 .tl{background:var(--s1);border-radius:8px;padding:12px 14px;border:var(--card-border);box-shadow:var(--card-shadow)}
 .tl .title{font-size:.6em;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:6px}
@@ -137,26 +164,32 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
   .metrics{flex-wrap:wrap}.m{min-width:130px}
   .m .v{font-size:1.6em}
   .bottom{grid-template-columns:1fr}
+  .cls-row{grid-template-columns:1fr}
   .cls-bars{grid-template-columns:1fr}
   .cb{grid-template-columns:70px 1fr 45px}
   .stim-btns{flex-direction:column;gap:8px}
+  .learn-stats{grid-template-columns:repeat(2,1fr)}
 }
 @media(min-width:901px) and (max-width:1200px){
   .grid{grid-template-columns:1fr 1fr}
   .blob-box{grid-column:1/-1;min-height:300px;order:-1}
   .chart-wrap canvas{position:relative!important;height:240px!important}
   .chart-wrap{min-height:240px}
+  .bottom{grid-template-columns:1fr 1fr}
 }
 @media(min-width:1800px){.m .v{font-size:2.6em}}
 </style>
-</head>
-<body>
+</head>"
+}
+
+fn body() -> String {
+  "<body>
 <div class='w'>
   <div id='toasts'></div>
 
   <div class='hdr'>
     <h1>VIVINO</h1>
-    <span class='tag'>HIFA-01 &bull; H. tessellatus &bull; 14-bit 67&micro;V/LSB</span>
+    <span class='tag'>HIFA-01 &bull; <span id='organism'>H. tessellatus</span> &bull; 14-bit 67&micro;V/LSB</span>
     <div class='right'>
       <span class='dot' id='dot'></span>
       <span id='conn'>--</span>
@@ -204,20 +237,35 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
     </div>
   </div>
 
-  <div class='cls' id='gpu'>
-    <div class='cls-title'>GPU Classificador</div>
-    <div class='cls-bars'>
-      <div class='cb' id='cb0'><span class='cb-name'>REPOUSO</span><div class='cb-track'><div class='cb-fill' id='bf0'></div></div><span class='cb-pct' id='p0'>--</span></div>
-      <div class='cb' id='cb1'><span class='cb-name'>CALMO</span><div class='cb-track'><div class='cb-fill' id='bf1'></div></div><span class='cb-pct' id='p1'>--</span></div>
-      <div class='cb' id='cb2'><span class='cb-name'>ATIVO</span><div class='cb-track'><div class='cb-fill' id='bf2'></div></div><span class='cb-pct' id='p2'>--</span></div>
-      <div class='cb' id='cb3'><span class='cb-name'>TRANSICAO</span><div class='cb-track'><div class='cb-fill' id='bf3'></div></div><span class='cb-pct' id='p3'>--</span></div>
-      <div class='cb' id='cb4'><span class='cb-name'>ESTIMULO</span><div class='cb-track'><div class='cb-fill' id='bf4'></div></div><span class='cb-pct' id='p4'>--</span></div>
-      <div class='cb' id='cb5'><span class='cb-name'>ESTRESSE</span><div class='cb-track'><div class='cb-fill' id='bf5'></div></div><span class='cb-pct' id='p5'>--</span></div>
+  <div class='cls'>
+    <div class='cls-row'>
+      <div class='cls-half'>
+        <div class='cls-title'>GPU Classificador</div>
+        <div class='cls-bars'>
+          <div class='cb' id='gcb0'><span class='cb-name'>REPOUSO</span><div class='cb-track'><div class='cb-fill' id='gbf0'></div></div><span class='cb-pct' id='gp0'>--</span></div>
+          <div class='cb' id='gcb1'><span class='cb-name'>CALMO</span><div class='cb-track'><div class='cb-fill' id='gbf1'></div></div><span class='cb-pct' id='gp1'>--</span></div>
+          <div class='cb' id='gcb2'><span class='cb-name'>ATIVO</span><div class='cb-track'><div class='cb-fill' id='gbf2'></div></div><span class='cb-pct' id='gp2'>--</span></div>
+          <div class='cb' id='gcb3'><span class='cb-name'>TRANSICAO</span><div class='cb-track'><div class='cb-fill' id='gbf3'></div></div><span class='cb-pct' id='gp3'>--</span></div>
+          <div class='cb' id='gcb4'><span class='cb-name'>ESTIMULO</span><div class='cb-track'><div class='cb-fill' id='gbf4'></div></div><span class='cb-pct' id='gp4'>--</span></div>
+          <div class='cb' id='gcb5'><span class='cb-name'>ESTRESSE</span><div class='cb-track'><div class='cb-fill' id='gbf5'></div></div><span class='cb-pct' id='gp5'>--</span></div>
+        </div>
+      </div>
+      <div class='cls-half'>
+        <div class='cls-title'>HDC k-NN Classificador</div>
+        <div class='cls-bars'>
+          <div class='cb' id='hcb0'><span class='cb-name'>REPOUSO</span><div class='cb-track'><div class='cb-fill' id='hbf0'></div></div><span class='cb-pct' id='hp0'>--</span></div>
+          <div class='cb' id='hcb1'><span class='cb-name'>CALMO</span><div class='cb-track'><div class='cb-fill' id='hbf1'></div></div><span class='cb-pct' id='hp1'>--</span></div>
+          <div class='cb' id='hcb2'><span class='cb-name'>ATIVO</span><div class='cb-track'><div class='cb-fill' id='hbf2'></div></div><span class='cb-pct' id='hp2'>--</span></div>
+          <div class='cb' id='hcb3'><span class='cb-name'>TRANSICAO</span><div class='cb-track'><div class='cb-fill' id='hbf3'></div></div><span class='cb-pct' id='hp3'>--</span></div>
+          <div class='cb' id='hcb4'><span class='cb-name'>ESTIMULO</span><div class='cb-track'><div class='cb-fill' id='hbf4'></div></div><span class='cb-pct' id='hp4'>--</span></div>
+          <div class='cb' id='hcb5'><span class='cb-name'>ESTRESSE</span><div class='cb-track'><div class='cb-fill' id='hbf5'></div></div><span class='cb-pct' id='hp5'>--</span></div>
+        </div>
+      </div>
     </div>
   </div>
 
   <div class='bottom'>
-    <div class='stim'>
+    <div class='card'>
       <div class='title'>Estimulos</div>
       <div class='stim-btns'>
         <div class='btn-group'>
@@ -239,6 +287,36 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
       <div class='stim-status' id='stimStatus'>Nenhum protocolo ativo</div>
       <div class='stim-log' id='stimLog'></div>
     </div>
+
+    <div class='card'>
+      <div class='title'>Rotular Estado (Online Learning)</div>
+      <div class='btn-group-row' style='margin-bottom:8px'>
+        <button class='lbl-btn' onclick='sendLabel(\"RESTING\")'>Repouso</button>
+        <button class='lbl-btn' onclick='sendLabel(\"CALM\")'>Calmo</button>
+        <button class='lbl-btn' onclick='sendLabel(\"ACTIVE\")'>Ativo</button>
+        <button class='lbl-btn' onclick='sendLabel(\"TRANSITION\")'>Transicao</button>
+        <button class='lbl-btn' onclick='sendLabel(\"STIMULUS\")'>Estimulo</button>
+        <button class='lbl-btn' onclick='sendLabel(\"STRESS\")'>Estresse</button>
+      </div>
+      <div class='title'>Organismo</div>
+      <div class='btn-group-row' style='margin-bottom:8px'>
+        <button class='org-btn active' data-org='shimeji' onclick='sendOrg(\"shimeji\")'>Shimeji</button>
+        <button class='org-btn' data-org='cannabis' onclick='sendOrg(\"cannabis\")'>Cannabis</button>
+        <button class='org-btn' data-org='fungal_generic' onclick='sendOrg(\"fungal_generic\")'>Fungo Gen.</button>
+      </div>
+      <div class='title'>Aprendizado</div>
+      <div class='cal-bar'><div class='cal-fill' id='calFill' style='width:0%'></div></div>
+      <div style='font-size:.6em;color:var(--t3);margin-top:4px' id='calText'>Calibracao: 0/60</div>
+      <div class='learn-stats' id='learnStats'>
+        <div class='learn-stat'><div class='ls-name'>REP</div><div class='ls-val' id='lsR'>0</div></div>
+        <div class='learn-stat'><div class='ls-name'>CAL</div><div class='ls-val' id='lsC'>0</div></div>
+        <div class='learn-stat'><div class='ls-name'>ATV</div><div class='ls-val' id='lsA'>0</div></div>
+        <div class='learn-stat'><div class='ls-name'>TRA</div><div class='ls-val' id='lsT'>0</div></div>
+        <div class='learn-stat'><div class='ls-name'>EST</div><div class='ls-val' id='lsSt'>0</div></div>
+        <div class='learn-stat'><div class='ls-name'>STR</div><div class='ls-val' id='lsSr'>0</div></div>
+      </div>
+    </div>
+
     <div class='tl'>
       <div class='title'>Linha do Tempo</div>
       <canvas id='timeline' height='24'></canvas>
@@ -246,31 +324,47 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
   </div>
 
   <div class='info'>
-    <span>VIVINO v2.1</span>
+    <span>VIVINO v3.0</span>
     <span>Gleam/BEAM</span>
     <span>14-bit OS @ 20Hz</span>
-    <span>H. tessellatus</span>
+    <span id='infoOrg'>H. tessellatus</span>
     <span id='fps'>0</span><span>q/s</span>
   </div>
-</div>
+</div>"
+}
 
+fn scripts() -> String {
+  "
 <script>
 const MAX=400,$=id=>document.getElementById(id);
 let sc=0,lr=Date.now(),total=0,frames=0,lastFps=Date.now();
 
 const SN={RESTING:'REPOUSO',CALM:'CALMO',ACTIVE:'ATIVO',AGITATED:'AGITADO',TRANSITION:'TRANSICAO',STRONG_STIMULUS:'ESTIMULO',STIMULUS:'ESTIMULO',STRESS:'ESTRESSE'};
 const SC={RESTING:'var(--grn)',CALM:'#66bb6a',ACTIVE:'var(--org)',AGITATED:'var(--red)',TRANSITION:'#ab47bc',STRONG_STIMULUS:'var(--red)',STIMULUS:'var(--org)',STRESS:'var(--red)'};
+const ORG_DISPLAY={shimeji:'H. tessellatus (shimeji)',cannabis:'Cannabis sativa',fungal_generic:'Fungo generico'};
 
 // Cached DOM refs
 const _mv=$('mv'),_dev=$('dev'),_std=$('std_card'),_dvdt=$('dvdt_card'),_state=$('state'),
       _elapsed=$('elapsed'),_total=$('total'),_rate=$('rate'),_fps=$('fps'),
-      _dot=$('dot'),_conn=$('conn'),_stimStatus=$('stimStatus'),_stimLog=$('stimLog');
-// Classifier bars
+      _dot=$('dot'),_conn=$('conn'),_stimStatus=$('stimStatus'),_stimLog=$('stimLog'),
+      _organism=$('organism'),_infoOrg=$('infoOrg'),
+      _calFill=$('calFill'),_calText=$('calText');
+
+// GPU classifier bars
 const _gpuKeys=['RESTING','CALM','ACTIVE','TRANSITION','STIMULUS','STRESS'];
-const _cbEls=[0,1,2,3,4,5].map(i=>$('cb'+i));
-const _bfEls=[0,1,2,3,4,5].map(i=>$('bf'+i));
-const _pEls=[0,1,2,3,4,5].map(i=>$('p'+i));
-let _lastBest=-1;
+const _gcbEls=[0,1,2,3,4,5].map(i=>$('gcb'+i));
+const _gbfEls=[0,1,2,3,4,5].map(i=>$('gbf'+i));
+const _gpEls=[0,1,2,3,4,5].map(i=>$('gp'+i));
+let _lastGpuBest=-1;
+
+// HDC classifier bars
+const _hcbEls=[0,1,2,3,4,5].map(i=>$('hcb'+i));
+const _hbfEls=[0,1,2,3,4,5].map(i=>$('hbf'+i));
+const _hpEls=[0,1,2,3,4,5].map(i=>$('hp'+i));
+let _lastHdcBest=-1;
+
+// Learning stat elements
+const _lsEls={RESTING:$('lsR'),CALM:$('lsC'),ACTIVE:$('lsA'),TRANSITION:$('lsT'),STIMULUS:$('lsSt'),STRESS:$('lsSr')};
 
 // Toast notifications
 function showToast(msg,type){
@@ -281,7 +375,7 @@ function showToast(msg,type){
   setTimeout(()=>t.remove(),3000);
 }
 
-// Command names and colors
+// Command names
 const CMD_NAMES={H:'Habituacao',F:'Rapida',E:'Explorar',S:'Pulso',X:'Parar'};
 
 function mkChart(id,label,color,hasZero){
@@ -328,6 +422,22 @@ function drawTimeline(){
 
 function fmtTime(s){const m=Math.floor(s/60),ss=Math.floor(s%60);return String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0');}
 
+// Update classifier bars (reusable for GPU and HDC)
+function updateBars(data,keys,cbEls,bfEls,pEls,bestState,lastBestRef){
+  const bIdx=keys.indexOf(bestState);
+  for(let i=0;i<6;i++){
+    const v=data[keys[i]];
+    const pct=v?(v*100):0;
+    pEls[i].textContent=v?pct.toFixed(1)+'%':'--';
+    bfEls[i].style.width=pct.toFixed(1)+'%';
+    bfEls[i].className='cb-fill s'+i;
+    if(bIdx!==lastBestRef[0]){cbEls[i].className=i===bIdx?'cb on':'cb';}
+  }
+  lastBestRef[0]=bIdx;
+}
+
+let _gpuBestRef=[_lastGpuBest],_hdcBestRef=[_lastHdcBest];
+
 function flush(){
   if(!buf.length){rafId=0;return;}
   const B=buf;buf=[];
@@ -348,6 +458,12 @@ function flush(){
   _total.textContent=total.toLocaleString('pt-BR');
   cMv.update('none');cDev.update('none');
 
+  // Update organism display
+  if(d.organism_display){
+    _organism.textContent=d.organism_display;
+    _infoOrg.textContent=d.organism_display;
+  }
+
   if(now-lastSlow>=500){
     lastSlow=now;
     if(d.features){const f=d.features;
@@ -356,17 +472,19 @@ function flush(){
       _dvdt.innerHTML=f.dvdt_max.toFixed(0)+'<span class=u>mV/s</span>';
       _dvdt.style.color=f.dvdt_max>500?'var(--red)':f.dvdt_max>200?'var(--org)':'var(--t1)';
     }
-    if(d.gpu){const gbest=d.gpu_state;
-      const bIdx=_gpuKeys.indexOf(gbest);
-      for(let i=0;i<6;i++){
-        const v=d.gpu[_gpuKeys[i]];
-        const pct=v?(v*100):0;
-        _pEls[i].textContent=v?pct.toFixed(1)+'%':'--';
-        _bfEls[i].style.width=pct.toFixed(1)+'%';
-        _bfEls[i].className='cb-fill s'+i;
-        if(bIdx!==_lastBest){_cbEls[i].className=i===bIdx?'cb on':'cb';}
+    // GPU bars
+    if(d.gpu){updateBars(d.gpu,_gpuKeys,_gcbEls,_gbfEls,_gpEls,d.gpu_state,_gpuBestRef);}
+    // HDC bars
+    if(d.hdc){updateBars(d.hdc,_gpuKeys,_hcbEls,_hbfEls,_hpEls,d.hdc_state,_hdcBestRef);}
+    // Learning stats
+    if(d.learning){
+      const L=d.learning;
+      const pct=Math.min(100,L.calibration_progress/L.calibration_total*100);
+      _calFill.style.width=pct+'%';
+      _calText.textContent=L.calibration_complete?'Calibrado':'Calibracao: '+L.calibration_progress+'/'+L.calibration_total;
+      if(L.exemplars){
+        for(const k in _lsEls){if(L.exemplars[k]!==undefined)_lsEls[k].textContent=L.exemplars[k];}
       }
-      _lastBest=bIdx;
     }
   }
   frames++;
@@ -418,6 +536,7 @@ function onCmdAck(d){
   log.prepend(ev);while(log.children.length>20)log.lastChild.remove();
 }
 
+// === Label + Organism commands ===
 var _ws=null;
 function sendCmd(c){
   if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
@@ -425,6 +544,32 @@ function sendCmd(c){
   const btn=document.querySelector('[data-cmd=\"'+c+'\"]');
   if(btn){btn.classList.add('sending');setTimeout(()=>btn.classList.remove('sending'),300);}
 }
+
+function sendLabel(state){
+  if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
+  _ws.send('L:'+state);
+  showToast('Rotulando: '+(SN[state]||state),'ok');
+}
+
+function sendOrg(org){
+  if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
+  _ws.send('O:'+org);
+}
+
+function onLabelAck(d){
+  showToast('Rotulado: '+(SN[d.label]||d.label),'ok');
+}
+
+function onOrganismAck(d){
+  const name=ORG_DISPLAY[d.organism]||d.organism;
+  showToast('Organismo: '+name,'ok');
+  _organism.textContent=name;
+  _infoOrg.textContent=name;
+  document.querySelectorAll('.org-btn').forEach(b=>{
+    b.classList.toggle('active',b.dataset.org===d.organism);
+  });
+}
+
 function connect(){
   const ws=new WebSocket('ws://'+location.host+'/ws');_ws=ws;
   ws.onopen=()=>{_dot.className='dot on';_conn.textContent='ON';showToast('Conectado','ok');};
@@ -433,6 +578,8 @@ function connect(){
   ws.onmessage=e=>{const d=JSON.parse(e.data);
     if(d.type==='stim'){onStim(d);}
     else if(d.type==='cmd_ack'){onCmdAck(d);}
+    else if(d.type==='label_ack'){onLabelAck(d);}
+    else if(d.type==='organism_ack'){onOrganismAck(d);}
     else{buf.push(d);if(!rafId)rafId=requestAnimationFrame(flush);}
   };
 }
