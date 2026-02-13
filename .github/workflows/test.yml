@@ -54,7 +54,20 @@ jobs:
           cat > /tmp/cuda_stubs.c << 'EOF'
           int cudaGetDevice(void* d) { return 0; }
           int cudaSetDevice(int d) { return 0; }
-          int cudaGetDeviceCount(int* c) { *c = 0; return 0; }
+          int cudaGetDeviceCount(int* c) { if(c) *c = 0; return 0; }
+          int cudaMalloc(void** p, long s) { return 0; }
+          int cudaFree(void* p) { return 0; }
+          int cudaMemcpy(void* d, void* s, long c, int k) { return 0; }
+          int cudaMemset(void* d, int v, long c) { return 0; }
+          int cudaStreamCreate(void* s) { return 0; }
+          int cudaStreamSynchronize(void* s) { return 0; }
+          int cudaGetDeviceProperties(void* p, int d) { return 0; }
+          void* __cudaRegisterFatBinary(void* f) { return 0; }
+          void __cudaUnregisterFatBinary(void* h) {}
+          void __cudaRegisterFunction(void** m, void* h, char* d, char* n, int t, void* a, void* b, void* c, void* e, int* f) {}
+          void __cudaRegisterVar(void** m, char* h, char* d, char* n, int e, long s, int c, int v) {}
+          void __cudaRegisterFatBinaryEnd(void* h) {}
+          void __cudaInitModule(void* h) {}
           EOF
           gcc -shared -Wl,-soname,libcudart.so.13 -o /tmp/libcudart.so.13 /tmp/cuda_stubs.c
           echo 'void cusparseLtInit() {}' | gcc -shared -Wl,-soname,libcusparseLt.so.0 -x c - -o /tmp/libcusparseLt.so.0
