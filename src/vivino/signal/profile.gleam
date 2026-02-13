@@ -5,7 +5,10 @@
 //// prototype vectors (GPU), and classification thresholds.
 
 import gleam/string
-import vivino/signal/features.{type FeatureThresholds, FeatureThresholds}
+import vivino/signal/features.{
+  type FeatureThresholds, type QualityThresholds, FeatureThresholds,
+  QualityThresholds,
+}
 
 /// Supported organisms
 pub type Organism {
@@ -41,6 +44,7 @@ pub type OrganismProfile {
     thresholds: FeatureThresholds,
     gpu_prototypes: List(List(Float)),
     softmax_temp: Float,
+    quality_thresholds: QualityThresholds,
   )
 }
 
@@ -90,17 +94,19 @@ fn shimeji_profile() -> OrganismProfile {
     organism: Shimeji,
     name: "shimeji",
     display_name: "H. tessellatus (shimeji)",
+    // Tighter quant_ranges for better HDC quantization resolution
+    // Calibrated from 10h real data (696K samples, 2026-02-13)
     quant_ranges: QuantRanges(
-      mean_min: -50.0,
-      mean_max: 50.0,
+      mean_min: -15.0,
+      mean_max: 15.0,
       std_min: 0.0,
-      std_max: 50.0,
+      std_max: 20.0,
       range_min: 0.0,
-      range_max: 200.0,
-      slope_min: -30.0,
-      slope_max: 30.0,
+      range_max: 60.0,
+      slope_min: -15.0,
+      slope_max: 15.0,
       energy_min: 0.0,
-      energy_max: 150_000.0,
+      energy_max: 20_000.0,
     ),
     gpu_bounds: [
       #(-50.0, 50.0),
@@ -136,43 +142,52 @@ fn shimeji_profile() -> OrganismProfile {
       transition_std_min: 6.0,
     ),
     gpu_prototypes: shimeji_prototypes(),
-    softmax_temp: 0.08,
+    softmax_temp: 0.12,
+    // Autocorrelation-based noise: fungi have high temporal structure
+    quality_thresholds: QualityThresholds(
+      flat_std_min: 0.01,
+      saturated_range_max: 240.0,
+      artifact_kurtosis_max: 20.0,
+      noisy_autocorr_min: 0.15,
+    ),
   )
 }
 
-/// Shimeji GPU prototypes — real data calibrated 2026-02-12
+/// Shimeji GPU prototypes — recalibrated from 10h real data (2026-02-13)
+/// RESTING calibrated from 696K samples: mean=0.1, std=1.7, range=7.7
+/// Other states proportionally spaced (Adamatzky 2022 spike amplitudes)
 /// Order: RESTING, CALM, ACTIVE, TRANSITION, STIMULUS, STRESS
 fn shimeji_prototypes() -> List(List(Float)) {
   [
-    // RESTING: σ~5mV
+    // RESTING: σ~1.7mV (real 10h data: median std=1.7, range=7.7, peaks=8.6)
     [
-      2.0, 5.0, -8.0, 15.0, 23.0, 0.3, 1500.0, 5.5, 60.0, 0.1, 0.35, 2.2, 1.0,
-      2.0, 0.7, 4.0, 0.91, -1.0, 4.0,
+      0.1, 1.7, -5.0, 6.0, 7.7, 0.0, 150.0, 1.8, 68.0, 0.1, 0.35, 2.2, 0.4, 0.0,
+      0.7, 8.5, 0.85, -1.1, 1.1,
     ],
-    // CALM: σ~8mV
+    // CALM: σ~4mV (2.3x RESTING, slow oscillation increase)
     [
-      3.0, 8.0, -15.0, 25.0, 40.0, 2.0, 4000.0, 9.0, 120.0, 0.15, 0.5, 2.0, 0.5,
-      0.5, 0.65, 6.0, 0.8, -4.0, 8.0,
+      0.5, 4.0, -8.0, 12.0, 20.0, 1.5, 900.0, 4.5, 120.0, 0.12, 0.45, 2.0, 0.5,
+      0.5, 0.65, 7.0, 0.78, -3.0, 5.0,
     ],
-    // ACTIVE: σ~15mV, spike trains 0.5-2Hz
+    // ACTIVE: σ~10mV, spike trains 0.5-2Hz (Adamatzky 2018)
     [
-      5.0, 15.0, -30.0, 50.0, 80.0, 5.0, 15_000.0, 16.0, 300.0, 0.25, 0.8, 1.8,
-      0.3, 1.0, 0.55, 10.0, 0.6, -10.0, 15.0,
+      2.0, 10.0, -20.0, 30.0, 50.0, 4.0, 5500.0, 11.0, 250.0, 0.2, 0.7, 1.8, 0.3,
+      1.0, 0.55, 10.0, 0.6, -6.0, 10.0,
     ],
-    // TRANSITION: propagating signal
+    // TRANSITION: propagating signal with directional slope
     [
-      8.0, 10.0, -20.0, 40.0, 60.0, -12.0, 6000.0, 11.0, 200.0, 0.2, 0.6, 2.5,
-      -0.5, 1.5, 0.6, 7.0, 0.7, -6.0, 12.0,
+      3.0, 7.0, -12.0, 22.0, 34.0, -8.0, 2800.0, 8.0, 170.0, 0.15, 0.55, 2.5,
+      -0.5, 1.5, 0.6, 7.0, 0.7, -4.0, 8.0,
     ],
-    // STIMULUS: fast dV/dt, sharp peak
+    // STIMULUS: fast dV/dt, sharp peak (0.03-2.1mV spike amplitude)
     [
-      15.0, 25.0, -40.0, 80.0, 120.0, 20.0, 40_000.0, 28.0, 600.0, 0.3, 1.2, 2.8,
-      1.5, 4.0, 0.45, 3.0, 0.4, -20.0, 35.0,
+      8.0, 20.0, -35.0, 60.0, 95.0, 15.0, 25_000.0, 22.0, 500.0, 0.25, 1.0, 2.8,
+      1.5, 4.0, 0.45, 3.0, 0.4, -15.0, 25.0,
     ],
-    // STRESS: high σ, chaotic
+    // STRESS: high σ, chaotic spiking (sustained agitation)
     [
-      20.0, 40.0, -60.0, 120.0, 180.0, 8.0, 100_000.0, 45.0, 500.0, 0.35, 1.5,
-      3.5, 0.5, 2.5, 0.75, 8.0, 0.3, -30.0, 50.0,
+      12.0, 35.0, -50.0, 100.0, 150.0, 8.0, 70_000.0, 38.0, 400.0, 0.3, 1.3, 3.5,
+      0.5, 2.5, 0.75, 8.0, 0.3, -25.0, 40.0,
     ],
   ]
 }
@@ -233,6 +248,13 @@ fn cannabis_profile() -> OrganismProfile {
     ),
     gpu_prototypes: cannabis_prototypes(),
     softmax_temp: 0.08,
+    // Vascular plants: wider ranges, higher signal amplitude
+    quality_thresholds: QualityThresholds(
+      flat_std_min: 0.1,
+      saturated_range_max: 2000.0,
+      artifact_kurtosis_max: 15.0,
+      noisy_autocorr_min: 0.15,
+    ),
   )
 }
 
@@ -329,6 +351,13 @@ fn fungal_generic_profile() -> OrganismProfile {
     ),
     gpu_prototypes: fungal_generic_prototypes(),
     softmax_temp: 0.08,
+    // Generic fungal: moderate ranges between shimeji and cannabis
+    quality_thresholds: QualityThresholds(
+      flat_std_min: 0.05,
+      saturated_range_max: 800.0,
+      artifact_kurtosis_max: 18.0,
+      noisy_autocorr_min: 0.15,
+    ),
   )
 }
 

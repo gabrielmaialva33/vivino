@@ -94,30 +94,36 @@ const dim = 10_048
 /// Number of quantization levels
 const num_levels = 16
 
-/// Samples for auto-calibration (3s @ 20Hz)
-const calibration_samples = 60
+/// Samples for auto-calibration (10s @ 20Hz — Domain-Aware HDC)
+const calibration_samples = 200
 
 /// Max exemplars per state in ring buffer
-const default_max_per_state = 5
+const default_max_per_state = 8
 
 /// Cutting angle threshold — reject if similarity > this
 const cutting_angle_threshold = 0.85
 
-/// Novelty detection gamma (σ multiplier)
-const novelty_gamma = 1.5
+/// Novelty detection gamma (σ multiplier) — LifeHD: 3.0 health, 1.0 diverse
+/// Biosignal: 2.5 balances false positive/negative (was 1.5 → 11% false rate)
+const novelty_gamma = 2.5
 
-/// EMA decay for state stats
-const stats_decay = 0.95
+/// EMA decay for state stats — LifeHD recommends 0.98 (~50 sample memory)
+const stats_decay = 0.98
 
 /// Minimum observations before novelty detection activates
-const novelty_min_count = 5
+const novelty_min_count = 15
 
 // ============================================
 // Initialization
 // ============================================
 
-/// Initialize dynamic HDC memory from an organism profile
-pub fn init(_profile: OrganismProfile) -> DynamicHdcMemory {
+/// Initialize dynamic HDC memory from an organism profile.
+///
+/// Seeds initial prototypes from profile GPU prototype features (LifeHD approach)
+/// instead of random HVs. This gives each state a meaningful starting
+/// representation, fixing the 15% base similarity problem.
+pub fn init(prof: OrganismProfile) -> DynamicHdcMemory {
+  let ranges = prof.quant_ranges
   let all_states = [Resting, Calm, Active, Transition, Stimulus, Stress]
 
   // Role vectors (deterministic seeds)
@@ -133,15 +139,41 @@ pub fn init(_profile: OrganismProfile) -> DynamicHdcMemory {
     |> yielder.to_list
     |> list.map(fn(i) { hdc.random(dim, 200 + i) })
 
-  // Initial prototypes (random seeds, same across profiles)
-  let initial_prototypes = [
-    #(Resting, hdc.random(dim, 1)),
-    #(Calm, hdc.random(dim, 2)),
-    #(Active, hdc.random(dim, 3)),
-    #(Transition, hdc.random(dim, 6)),
-    #(Stimulus, hdc.random(dim, 4)),
-    #(Stress, hdc.random(dim, 5)),
+  // Seed prototypes from profile GPU prototype features (LifeHD)
+  // GPU prototype indices: 0=mean, 1=std, 4=range, 5=slope, 6=energy
+  let state_indices = [
+    #(Resting, 0),
+    #(Calm, 1),
+    #(Active, 2),
+    #(Transition, 3),
+    #(Stimulus, 4),
+    #(Stress, 5),
   ]
+  let initial_prototypes =
+    list.map(state_indices, fn(pair) {
+      let #(state, idx) = pair
+      case list.drop(prof.gpu_prototypes, idx) {
+        [proto_feats, ..] -> {
+          let hv =
+            encode_from_values(
+              role_mean,
+              role_std,
+              role_range,
+              role_slope,
+              role_energy,
+              levels,
+              list_at_f(proto_feats, 0),
+              list_at_f(proto_feats, 1),
+              list_at_f(proto_feats, 4),
+              list_at_f(proto_feats, 5),
+              list_at_f(proto_feats, 6),
+              ranges,
+            )
+          #(state, hv)
+        }
+        [] -> #(state, hdc.random(dim, state_to_seed(state)))
+      }
+    })
 
   // Initialize per-state stats for novelty detection
   let state_stats =
@@ -165,6 +197,65 @@ pub fn init(_profile: OrganismProfile) -> DynamicHdcMemory {
     recent_hvs: [],
     learning_rejected: 0,
   )
+}
+
+/// Get float at index from a list
+fn list_at_f(lst: List(Float), idx: Int) -> Float {
+  case list.drop(lst, idx) {
+    [val, ..] -> val
+    [] -> 0.0
+  }
+}
+
+/// Seed fallback for missing profile prototypes
+fn state_to_seed(state: PlantState) -> Int {
+  case state {
+    Resting -> 1
+    Calm -> 2
+    Active -> 3
+    Stimulus -> 4
+    Stress -> 5
+    Transition -> 6
+    Unknown -> 7
+  }
+}
+
+/// Encode raw feature values into a hypervector (for prototype seeding)
+fn encode_from_values(
+  role_mean: HyperVector,
+  role_std: HyperVector,
+  role_range: HyperVector,
+  role_slope: HyperVector,
+  role_energy: HyperVector,
+  levels: List(HyperVector),
+  mean: Float,
+  std: Float,
+  range_val: Float,
+  slope: Float,
+  energy: Float,
+  ranges: QuantRanges,
+) -> HyperVector {
+  let get_lv = fn(idx: Int) -> HyperVector {
+    case list.drop(levels, idx) {
+      [level, ..] -> level
+      [] -> {
+        let assert [last, ..] = list.reverse(levels)
+        last
+      }
+    }
+  }
+
+  let mean_lv = get_lv(quantize(mean, ranges.mean_min, ranges.mean_max))
+  let std_lv = get_lv(quantize(std, ranges.std_min, ranges.std_max))
+  let range_lv = get_lv(quantize(range_val, ranges.range_min, ranges.range_max))
+  let slope_lv = get_lv(quantize(slope, ranges.slope_min, ranges.slope_max))
+  let energy_lv = get_lv(quantize(energy, ranges.energy_min, ranges.energy_max))
+
+  hdc.bind(role_mean, mean_lv)
+  |> hdc.bind(hdc.bind(role_std, std_lv))
+  |> hdc.bind(hdc.bind(role_range, range_lv))
+  |> hdc.bind(hdc.bind(role_slope, slope_lv))
+  |> hdc.bind(hdc.bind(role_energy, energy_lv))
 }
 
 // ============================================

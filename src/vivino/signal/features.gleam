@@ -642,30 +642,57 @@ pub type SignalQuality {
   SignalQuality(score: Float, is_good: Bool, reason: String)
 }
 
-/// Assess signal quality from extracted features
+/// Profile-dependent quality thresholds (Adamatzky 2026 + SIGNET)
+pub type QualityThresholds {
+  QualityThresholds(
+    flat_std_min: Float,
+    saturated_range_max: Float,
+    artifact_kurtosis_max: Float,
+    noisy_autocorr_min: Float,
+  )
+}
+
+/// Default quality thresholds (conservative)
+pub fn default_quality_thresholds() -> QualityThresholds {
+  QualityThresholds(
+    flat_std_min: 0.01,
+    saturated_range_max: 500.0,
+    artifact_kurtosis_max: 20.0,
+    noisy_autocorr_min: 0.2,
+  )
+}
+
+/// Assess signal quality with default thresholds
 pub fn assess_quality(f: SignalFeatures) -> SignalQuality {
-  // Flat line — electrode disconnected?
-  case f.std <. 0.001 {
+  assess_quality_with(f, default_quality_thresholds())
+}
+
+/// Assess signal quality with organism-specific thresholds
+///
+/// Uses autocorrelation (lag-1) instead of SNR for noise detection.
+/// Biological signals have structured temporal patterns (autocorr > 0.2),
+/// while noise is uncorrelated (autocorr ~ 0). This correctly handles
+/// zero-mean oscillating biosignals that the old SNR formula misclassified.
+pub fn assess_quality_with(
+  f: SignalFeatures,
+  q: QualityThresholds,
+) -> SignalQuality {
+  case f.std <. q.flat_std_min {
     True -> SignalQuality(score: 0.1, is_good: False, reason: "flat_line")
     False ->
-      // Saturated — extreme range
-      case f.range >. 500.0 {
+      case f.range >. q.saturated_range_max {
         True -> SignalQuality(score: 0.2, is_good: False, reason: "saturated")
         False ->
-          // Artifact — extreme kurtosis
-          case f.kurtosis >. 15.0 {
+          case f.kurtosis >. q.artifact_kurtosis_max {
             True ->
               SignalQuality(score: 0.3, is_good: False, reason: "artifact")
-            False -> {
-              // Noisy — low SNR
-              let abs_mean = float.absolute_value(f.mean)
-              case abs_mean /. f.std <. 0.5 && f.std >. 1.0 {
+            False ->
+              case f.autocorr_lag1 <. q.noisy_autocorr_min {
                 True ->
                   SignalQuality(score: 0.4, is_good: False, reason: "noisy")
                 False ->
                   SignalQuality(score: 1.0, is_good: True, reason: "good")
               }
-            }
           }
       }
   }

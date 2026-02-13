@@ -40,6 +40,9 @@ const web_port = 3000
 /// Min samples between pseudo-labels (rate limiting)
 const pseudo_label_cooldown = 20
 
+/// Drift correction interval (every 30 samples = 1.5s @ 20Hz)
+const drift_interval = 30
+
 /// Processing state carried through the loop
 type LoopState {
   LoopState(
@@ -52,6 +55,8 @@ type LoopState {
     temporal_ctx: learner.TemporalContext,
     pseudo_label_count: Int,
     last_pseudo_label_sample: Int,
+    quant_ranges: profile.QuantRanges,
+    gpu_seed_count: Int,
   )
 }
 
@@ -109,6 +114,8 @@ pub fn main() {
       temporal_ctx: learner.init_temporal_context(5),
       pseudo_label_count: 0,
       last_pseudo_label_sample: 0,
+      quant_ranges: prof.quant_ranges,
+      gpu_seed_count: 0,
     )
 
   // 6. Open serial port directly
@@ -180,8 +187,12 @@ fn process_line(line: String, state: LoopState) -> LoopState {
           // [2] Extract 27 features from cleaned signal
           let feats = features.extract(cleaned)
 
-          // [3] Signal quality assessment (SIGNET)
-          let quality = features.assess_quality(feats)
+          // [3] Signal quality assessment (profile-dependent, autocorr-based)
+          let quality =
+            features.assess_quality_with(
+              feats,
+              state.profile.quality_thresholds,
+            )
 
           let rule_state =
             features.classify_state_with(feats, state.profile.thresholds)
@@ -198,9 +209,8 @@ fn process_line(line: String, state: LoopState) -> LoopState {
           }
           display.print_gpu(gpu_sims, gpu_state_str)
 
-          // [5] HDC encode with profile ranges
-          let base_hv =
-            learner.encode(state.hdc, feats, state.profile.quant_ranges)
+          // [5] HDC encode with adaptive quant ranges (drift-corrected)
+          let base_hv = learner.encode(state.hdc, feats, state.quant_ranges)
 
           // [6] N-gram temporal encoding (HDC-EMG)
           let #(temporal_hv, hdc_with_temporal) =
@@ -265,10 +275,14 @@ fn process_line(line: String, state: LoopState) -> LoopState {
             Error(_) -> #(hdc_with_stats, new_gpu)
           }
 
-          // [12] Pseudo-labeling (LifeHD semi-supervised)
-          let #(final_hdc, final_gpu, new_pseudo_count, new_last_pseudo) = case
-            quality.is_good && !novelty.is_novel
-          {
+          // [12] Pseudo-labeling (LifeHD) + GPU-only seeding (bootstrap)
+          let #(
+            final_hdc,
+            final_gpu,
+            new_pseudo_count,
+            new_last_pseudo,
+            new_gpu_seeds,
+          ) = case quality.is_good && !novelty.is_novel {
             True ->
               case
                 try_pseudo_label(
@@ -281,6 +295,10 @@ fn process_line(line: String, state: LoopState) -> LoopState {
                 )
               {
                 Ok(pseudo_state) -> {
+                  // Only teach HDC (not GPU) to avoid circular self-reinforcement
+                  io.println(
+                    "  PSEUDO-LABEL: " <> learner.state_to_string(pseudo_state),
+                  )
                   let p_hdc =
                     learner.learn(
                       after_label_hdc,
@@ -288,33 +306,71 @@ fn process_line(line: String, state: LoopState) -> LoopState {
                       pseudo_state,
                       reading.elapsed,
                     )
-                  let p_gpu = case after_label_gpu {
-                    Ok(g) ->
-                      Ok(dynamic_gpu.learn(
-                        g,
-                        feats,
-                        learner.state_to_string(pseudo_state),
-                      ))
-                    Error(e) -> Error(e)
-                  }
-                  #(p_hdc, p_gpu, state.pseudo_label_count + 1, new_count)
+                  #(
+                    p_hdc,
+                    after_label_gpu,
+                    state.pseudo_label_count + 1,
+                    new_count,
+                    state.gpu_seed_count,
+                  )
                 }
-                Error(_) -> #(
-                  after_label_hdc,
-                  after_label_gpu,
-                  state.pseudo_label_count,
-                  state.last_pseudo_label_sample,
-                )
+                Error(_) ->
+                  // GPU-only seeding: bootstrap HDC for states with few exemplars
+                  case
+                    try_gpu_seed(
+                      gpu_state_str,
+                      gpu_sims,
+                      after_label_hdc,
+                      new_count,
+                      state.last_pseudo_label_sample,
+                    )
+                  {
+                    Ok(seed_state) -> {
+                      io.println(
+                        "  GPU-SEED: " <> learner.state_to_string(seed_state),
+                      )
+                      let seeded_hdc =
+                        learner.learn(
+                          after_label_hdc,
+                          temporal_hv,
+                          seed_state,
+                          reading.elapsed,
+                        )
+                      #(
+                        seeded_hdc,
+                        after_label_gpu,
+                        state.pseudo_label_count,
+                        new_count,
+                        state.gpu_seed_count + 1,
+                      )
+                    }
+                    Error(_) -> #(
+                      after_label_hdc,
+                      after_label_gpu,
+                      state.pseudo_label_count,
+                      state.last_pseudo_label_sample,
+                      state.gpu_seed_count,
+                    )
+                  }
               }
             False -> #(
               after_label_hdc,
               after_label_gpu,
               state.pseudo_label_count,
               state.last_pseudo_label_sample,
+              state.gpu_seed_count,
             )
           }
 
-          // [13] Build and broadcast JSON
+          // [13] Drift correction on quant_ranges (Piran 2025)
+          let new_quant_ranges = case
+            final_hdc.calibration_complete && new_count % drift_interval == 0
+          {
+            True -> drift_correct_ranges(state.quant_ranges, feats, 0.01)
+            False -> state.quant_ranges
+          }
+
+          // [14] Build and broadcast JSON
           let json_str =
             build_json(
               reading,
@@ -329,6 +385,7 @@ fn process_line(line: String, state: LoopState) -> LoopState {
               quality,
               novelty,
               new_pseudo_count,
+              new_gpu_seeds,
             )
           process.send(state.pubsub, pubsub.Broadcast(json_str))
 
@@ -341,6 +398,8 @@ fn process_line(line: String, state: LoopState) -> LoopState {
             temporal_ctx: new_temporal_ctx,
             pseudo_label_count: new_pseudo_count,
             last_pseudo_label_sample: new_last_pseudo,
+            quant_ranges: new_quant_ranges,
+            gpu_seed_count: new_gpu_seeds,
           )
         }
         False -> {
@@ -388,7 +447,7 @@ fn try_pseudo_label(
       case current_sample - last_pseudo_sample >= pseudo_label_cooldown {
         False -> Error(Nil)
         True -> {
-          // GPU confidence > 0.6?
+          // GPU confidence > 0.25 (1.5x uniform for 6 classes)
           let gpu_conf =
             list.find(gpu_sims, fn(s) { s.0 == gpu_state_str })
             |> result.map(fn(s) { s.1 })
@@ -400,7 +459,7 @@ fn try_pseudo_label(
             |> result.map(fn(s) { s.1 })
             |> result.unwrap(0.0)
 
-          case gpu_conf >. 0.6 && hdc_conf >. 0.4 {
+          case gpu_conf >. 0.25 && hdc_conf >. 0.4 {
             True -> Ok(hdc_state)
             False -> Error(Nil)
           }
@@ -408,6 +467,85 @@ fn try_pseudo_label(
       }
     }
   }
+}
+
+/// GPU-only seeding: bootstrap HDC with states it hasn't learned yet.
+///
+/// Breaks the chicken-and-egg problem: HDC can't learn because pseudo-labeling
+/// requires HDC-GPU agreement, but HDC can't agree because it hasn't learned.
+/// Solution: trust GPU's high-confidence classifications to seed HDC exemplars
+/// for states with < 3 exemplars (bootstrap only, not ongoing learning).
+fn try_gpu_seed(
+  gpu_state_str: String,
+  gpu_sims: List(#(String, Float)),
+  hdc_memory: learner.DynamicHdcMemory,
+  current_sample: Int,
+  last_pseudo_sample: Int,
+) -> Result(learner.PlantState, Nil) {
+  // Only after HDC calibration is complete
+  case hdc_memory.calibration_complete {
+    False -> Error(Nil)
+    True ->
+      // Rate limit
+      case current_sample - last_pseudo_sample >= pseudo_label_cooldown {
+        False -> Error(Nil)
+        True ->
+          case learner.parse_state(gpu_state_str) {
+            Error(_) -> Error(Nil)
+            Ok(gpu_state) -> {
+              // GPU confidence > 0.4?
+              let gpu_conf =
+                list.find(gpu_sims, fn(s) { s.0 == gpu_state_str })
+                |> result.map(fn(s) { s.1 })
+                |> result.unwrap(0.0)
+              // HDC has < 3 exemplars for this state?
+              let state_count =
+                learner.exemplar_counts(hdc_memory)
+                |> list.find(fn(c) { c.0 == gpu_state })
+                |> result.map(fn(c) { c.1 })
+                |> result.unwrap(0)
+              // 0.25 = 1.5x uniform baseline (16.7% for 6 classes)
+              case gpu_conf >. 0.25 && state_count < 3 {
+                True -> Ok(gpu_state)
+                False -> Error(Nil)
+              }
+            }
+          }
+      }
+  }
+}
+
+/// Drift correction: expand quant_ranges via EMA when observed values exceed bounds
+/// (Piran 2025 — adaptive quantization for non-stationary biosignals)
+fn drift_correct_ranges(
+  current: profile.QuantRanges,
+  f: features.SignalFeatures,
+  alpha: Float,
+) -> profile.QuantRanges {
+  let expand_min = fn(curr: Float, val: Float) {
+    case val <. curr {
+      True -> alpha *. val +. { 1.0 -. alpha } *. curr
+      False -> curr
+    }
+  }
+  let expand_max = fn(curr: Float, val: Float) {
+    case val >. curr {
+      True -> alpha *. val +. { 1.0 -. alpha } *. curr
+      False -> curr
+    }
+  }
+  profile.QuantRanges(
+    mean_min: expand_min(current.mean_min, f.mean),
+    mean_max: expand_max(current.mean_max, f.mean),
+    std_min: expand_min(current.std_min, f.std),
+    std_max: expand_max(current.std_max, f.std),
+    range_min: expand_min(current.range_min, f.range),
+    range_max: expand_max(current.range_max, f.range),
+    slope_min: expand_min(current.slope_min, f.slope),
+    slope_max: expand_max(current.slope_max, f.slope),
+    energy_min: expand_min(current.energy_min, f.energy),
+    energy_max: expand_max(current.energy_max, f.energy),
+  )
 }
 
 /// Build full JSON payload with quality, novelty, and pseudo-label stats
@@ -424,6 +562,7 @@ fn build_json(
   quality: features.SignalQuality,
   novelty: learner.NoveltyInfo,
   pseudo_count: Int,
+  gpu_seed_count: Int,
 ) -> String {
   json.object([
     #("elapsed", json.float(r.elapsed)),
@@ -442,6 +581,7 @@ fn build_json(
     #("quality", features.quality_to_json_value(quality)),
     #("novelty", learner.novelty_to_json_value(novelty)),
     #("pseudo_labels", json.int(pseudo_count)),
+    #("gpu_seeds", json.int(gpu_seed_count)),
   ])
   |> json.to_string
 }
