@@ -58,5 +58,12 @@ jobs:
 
       - run: gleam deps download
       - run: gleam build
+
+      - name: Link NIF into build tree
+        run: |
+          mkdir -p build/dev/erlang/viva_tensor/priv
+          cp ../viva_tensor/priv/viva_tensor_zig.so build/dev/erlang/viva_tensor/priv/
+          ls -la build/dev/erlang/viva_tensor/priv/
+
       - run: gleam test
       - run: gleam format --check src test
