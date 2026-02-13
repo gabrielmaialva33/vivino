@@ -1,6 +1,8 @@
 -module(vivino_ffi).
 -export([read_line/0, open_serial/2, detect_port/0, timestamp_ms/0,
-         send_serial_cmd/1, read_port_line/1, write_serial/2]).
+         send_serial_cmd/1, read_port_line/1, write_serial/2,
+         put_label/1, get_label/0, put_organism/1, get_organism/0,
+         get_env/1]).
 
 %% Read a line from stdin with error handling.
 %% Returns {ok, Binary} | {error, nil}
@@ -98,6 +100,39 @@ detect_port([Port | Rest]) ->
 %% Monotonic timestamp in milliseconds (for latency measurement)
 timestamp_ms() ->
     erlang:monotonic_time(millisecond).
+
+%% Label management via persistent_term (WebSocket -> main loop)
+put_label(Label) ->
+    persistent_term:put(vivino_pending_label, Label),
+    {ok, nil}.
+
+get_label() ->
+    case catch persistent_term:get(vivino_pending_label) of
+        {'EXIT', _} -> {error, nil};
+        undefined -> {error, nil};
+        Label ->
+            persistent_term:put(vivino_pending_label, undefined),
+            {ok, Label}
+    end.
+
+%% Organism selection via persistent_term
+put_organism(Organism) ->
+    persistent_term:put(vivino_organism, Organism),
+    {ok, nil}.
+
+get_organism() ->
+    case catch persistent_term:get(vivino_organism) of
+        {'EXIT', _} -> {ok, <<"shimeji">>};
+        undefined -> {ok, <<"shimeji">>};
+        Org -> {ok, Org}
+    end.
+
+%% Read environment variable. Returns {ok, Value} | {error, nil}
+get_env(Name) ->
+    case os:getenv(binary_to_list(Name)) of
+        false -> {error, nil};
+        Value -> {ok, unicode:characters_to_binary(Value)}
+    end.
 
 %% Send a command to Arduino via serial device.
 %% Uses persistent_term to get device path stored during open_serial.
