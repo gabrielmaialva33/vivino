@@ -97,12 +97,13 @@ pub fn extract(readings: List(Reading)) -> SignalFeatures {
   let dvdt_max = compute_dvdt_max(deviations)
   let zcr = compute_zcr(deviations, mean)
   let #(hjorth_mob, hjorth_cmp) = compute_hjorth(deviations)
-  let mfcc = compute_mfcc(deviations)
+  // Compute mel spectrum once — shared by MFCC and spectral entropy
+  let mel_spec = compute_mel_spec_shared(deviations)
+  let mfcc = mfcc_from_mel_spec(mel_spec)
+  let spectral_entropy = entropy_from_mel_spec(mel_spec)
 
-  // New features
   let skewness = compute_skewness(deviations, mean, std)
   let kurtosis = compute_kurtosis(deviations, mean, std)
-  let spectral_entropy = compute_spectral_entropy(deviations)
   let peak_count = compute_peak_count(deviations)
   let autocorr_lag1 = compute_autocorr(deviations, mean)
   let #(p25, p75) = compute_percentiles(deviations)
@@ -262,7 +263,7 @@ fn mel_edges() -> List(Float) {
   let mel_max = hz_to_mel(25.0)
   let num_points = mfcc_num_filters + 2
   let step = { mel_max -. mel_min } /. int.to_float(num_points - 1)
-  int.range(from: 0, to: num_points - 1, with: [], run: fn(acc, i) {
+  int.range(from: 0, to: num_points, with: [], run: fn(acc, i) {
     [mel_to_hz(mel_min +. int.to_float(i) *. step), ..acc]
   })
   |> list.reverse
@@ -338,7 +339,7 @@ fn mel_filter_loop(
 fn dct_ii(log_spectrum: List(Float)) -> List(Float) {
   let m = int.to_float(list.length(log_spectrum))
   let pi = math_pi()
-  int.range(from: 1, to: mfcc_num_coeffs, with: [], run: fn(acc, n) {
+  int.range(from: 1, to: mfcc_num_coeffs + 1, with: [], run: fn(acc, n) {
     [dct_sum(log_spectrum, 0, int.to_float(n), m, pi), ..acc]
   })
   |> list.reverse
@@ -360,13 +361,22 @@ fn dct_sum(
   }
 }
 
-/// Full MFCC pipeline: Hamming → Goertzel mel spectrum → log → DCT
-fn compute_mfcc(deviations: List(Float)) -> List(Float) {
+/// Compute mel spectrum once (shared by MFCC and spectral entropy)
+fn compute_mel_spec_shared(deviations: List(Float)) -> List(Float) {
   case list.length(deviations) < 8 {
-    True -> list.repeat(0.0, mfcc_num_coeffs)
+    True -> []
     False -> {
       let windowed = hamming_window(deviations)
-      let mel_spec = compute_mel_spectrum(windowed)
+      compute_mel_spectrum(windowed)
+    }
+  }
+}
+
+/// MFCC from pre-computed mel spectrum: log → DCT
+fn mfcc_from_mel_spec(mel_spec: List(Float)) -> List(Float) {
+  case mel_spec {
+    [] -> list.repeat(0.0, mfcc_num_coeffs)
+    _ -> {
       let log_spec =
         list.map(mel_spec, fn(x) {
           case x >. 1.0e-10 {
@@ -418,13 +428,11 @@ fn compute_kurtosis(values: List(Float), mean: Float, std: Float) -> Float {
   }
 }
 
-/// Spectral entropy from mel spectrum — signal complexity measure
-fn compute_spectral_entropy(values: List(Float)) -> Float {
-  case list.length(values) < 8 {
-    True -> 0.0
-    False -> {
-      let windowed = hamming_window(values)
-      let mel_spec = compute_mel_spectrum(windowed)
+/// Spectral entropy from pre-computed mel spectrum
+fn entropy_from_mel_spec(mel_spec: List(Float)) -> Float {
+  case mel_spec {
+    [] -> 0.0
+    _ -> {
       let total =
         list.fold(mel_spec, 0.0, fn(acc, x) { acc +. float.absolute_value(x) })
       case total >. 1.0e-10 {
@@ -438,7 +446,6 @@ fn compute_spectral_entropy(values: List(Float)) -> Float {
                 False -> acc
               }
             })
-          // Normalize by log(num_filters)
           entropy /. math_ln(12.0)
         }
         False -> 0.0

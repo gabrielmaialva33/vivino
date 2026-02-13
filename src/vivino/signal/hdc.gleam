@@ -109,18 +109,18 @@ fn get_level(memory: HdcMemory, idx: Int) -> HyperVector {
 }
 
 /// Encode signal features as a hypervector via role-binding
-/// Ranges calibrated for sweet potato tuber tissue:
-///   mean:   [-500, 500] mV (deviation, tuber tighter range)
-///   std:    [0, 300] mV (50-sample window)
-///   range:  [0, 1600] mV
-///   slope:  [-400, 400] mV (wound recovery slopes)
-///   energy: [0, 2_500_000] (L2² of 50 deviation samples)
+/// Ranges calibrated for shimeji mycelium (H. tessellatus):
+///   mean:   [-50, 50] mV (deviation from baseline)
+///   std:    [0, 50] mV (50-sample window)
+///   range:  [0, 200] mV
+///   slope:  [-30, 30] mV (propagating signals)
+///   energy: [0, 150_000] (L2² of 50 deviation samples)
 pub fn encode(memory: HdcMemory, f: SignalFeatures) -> HyperVector {
-  let mean_lv = get_level(memory, quantize(f.mean, -500.0, 500.0))
-  let std_lv = get_level(memory, quantize(f.std, 0.0, 300.0))
-  let range_lv = get_level(memory, quantize(f.range, 0.0, 1600.0))
-  let slope_lv = get_level(memory, quantize(f.slope, -400.0, 400.0))
-  let energy_lv = get_level(memory, quantize(f.energy, 0.0, 2_500_000.0))
+  let mean_lv = get_level(memory, quantize(f.mean, -50.0, 50.0))
+  let std_lv = get_level(memory, quantize(f.std, 0.0, 50.0))
+  let range_lv = get_level(memory, quantize(f.range, 0.0, 200.0))
+  let slope_lv = get_level(memory, quantize(f.slope, -30.0, 30.0))
+  let energy_lv = get_level(memory, quantize(f.energy, 0.0, 150_000.0))
 
   // Bind role with level: role XOR level_vector
   hdc.bind(memory.role_mean, mean_lv)
