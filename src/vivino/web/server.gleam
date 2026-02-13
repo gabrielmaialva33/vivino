@@ -16,6 +16,7 @@ import mist.{
   type WebsocketMessage,
 }
 import vivino/serial/port
+import vivino/signal/label_bridge
 import vivino/web/dashboard
 import vivino/web/pubsub
 
@@ -120,18 +121,44 @@ fn handle_websocket(
         }
         mist.Text(cmd) -> {
           let trimmed = string.trim(cmd)
-          case trimmed {
-            "H" | "F" | "E" | "S" | "X" -> {
-              let _ = port.send_command(trimmed)
-              io.println("CMD -> Arduino: " <> trimmed)
+          case string.split_once(trimmed, ":") {
+            // Label command: L:RESTING, L:CALM, etc.
+            Ok(#("L", label)) -> {
+              let _ = label_bridge.put_label(label)
+              io.println("LABEL: " <> label)
               let _ =
                 mist.send_text_frame(
                   conn,
-                  "{\"type\":\"cmd_ack\",\"cmd\":\"" <> trimmed <> "\"}",
+                  "{\"type\":\"label_ack\",\"label\":\"" <> label <> "\"}",
                 )
               mist.continue(state)
             }
-            _ -> mist.continue(state)
+            // Organism command: O:shimeji, O:cannabis, O:fungal_generic
+            Ok(#("O", org)) -> {
+              let _ = label_bridge.put_organism(org)
+              io.println("ORGANISM: " <> org)
+              let _ =
+                mist.send_text_frame(
+                  conn,
+                  "{\"type\":\"organism_ack\",\"organism\":\"" <> org <> "\"}",
+                )
+              mist.continue(state)
+            }
+            _ -> {
+              case trimmed {
+                "H" | "F" | "E" | "S" | "X" -> {
+                  let _ = port.send_command(trimmed)
+                  io.println("CMD -> Arduino: " <> trimmed)
+                  let _ =
+                    mist.send_text_frame(
+                      conn,
+                      "{\"type\":\"cmd_ack\",\"cmd\":\"" <> trimmed <> "\"}",
+                    )
+                  mist.continue(state)
+                }
+                _ -> mist.continue(state)
+              }
+            }
           }
         }
         mist.Closed | mist.Shutdown -> mist.stop()
