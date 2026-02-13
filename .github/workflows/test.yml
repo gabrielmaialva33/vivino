@@ -16,32 +16,19 @@ jobs:
       - name: Clone viva_tensor (sibling dependency)
         run: git clone --depth 1 https://github.com/gabrielmaialva33/viva_tensor.git ../viva_tensor
 
+      - name: Download pre-built NIF
+        run: |
+          cd ../viva_tensor
+          gh release download v2.1.0 --repo gabrielmaialva33/viva_tensor --pattern 'viva_tensor_zig.so' --dir priv/
+          ls -la priv/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - uses: erlef/setup-beam@v1
         with:
           otp-version: "28"
           gleam-version: "1.14.0"
           rebar3-version: "3"
-
-      - name: Install Zig
-        run: |
-          curl -sSL https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz | tar -xJ -C /tmp
-          echo "/tmp/zig-linux-x86_64-0.14.0" >> $GITHUB_PATH
-
-      - name: Install Intel MKL
-        run: |
-          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | sudo gpg --dearmor -o /usr/share/keyrings/intel-oneapi.gpg
-          echo "deb [signed-by=/usr/share/keyrings/intel-oneapi.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/intel-oneapi.list
-          sudo apt-get update
-          sudo apt-get install -y intel-oneapi-mkl-devel
-
-      - name: Build viva_tensor NIF
-        run: |
-          cd ../viva_tensor
-          ERL_INCLUDE=$(erl -noshell -eval 'io:format("~s", [filename:join([code:root_dir(), "erts-" ++ erlang:system_info(version), "include"])]), halt().')
-          cd zig_src && zig build -Derl_include="$ERL_INCLUDE" -Doptimize=ReleaseFast
-          cd ..
-          cp zig_src/zig-out/lib/libviva_tensor_zig.so priv/viva_tensor_zig.so
-          ls -la priv/
 
       - run: gleam deps download
       - run: gleam test
