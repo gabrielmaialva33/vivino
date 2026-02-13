@@ -8,24 +8,22 @@
 [![Version](https://img.shields.io/badge/version-0.1.0-40916c?style=for-the-badge)](./gleam.toml)
 [![License](https://img.shields.io/badge/MIT-1a472a?style=for-the-badge)](./LICENSE)
 
----
-
-*"Plantas nao falam. Mas se voce escutar com a resolucao certa, elas cantam."*
+**Real-time plant bioelectric intelligence on the BEAM**
 
 </div>
 
 ---
 
 > [!IMPORTANT]
-> **VIVINO nao e um datalogger.**
-> E um sistema de inteligencia bioeletrica em tempo real.
-> Dois classificadores AI (HDC hiperdimensional + GPU euclidiano) aprendem
-> a linguagem eletrica de cada organismo — cogumelos, maconha, fungos.
-> Se voce rotular, ele aprende. Se voce trocar de especie, ele se adapta.
+> **VIVINO is not a datalogger.**
+> It's a real-time bioelectric intelligence system.
+> Two AI classifiers (HDC hyperdimensional + GPU euclidean) learn
+> the electrical language of each organism — mushrooms, cannabis, fungi.
+> If you label, it learns. If you switch species, it adapts.
 
 ---
 
-## Overview
+## Architecture
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2d6a4f', 'primaryTextColor': '#fff', 'primaryBorderColor': '#1a472a', 'lineColor': '#40916c'}}}%%
@@ -54,16 +52,16 @@ flowchart LR
     VIVINO -->|JSON| OUT
 ```
 
-| Propriedade | Valor |
-|:------------|:------|
-| **Linguagem** | Pure Gleam (type-safe functional) |
+| Property | Value |
+|:---------|:------|
+| **Language** | Pure Gleam (type-safe functional) |
 | **Runtime** | BEAM/OTP 28+ |
-| **Testes** | 45 passando |
-| **Features** | 27 dimensoes por janela |
-| **HDC** | 10,048-dim hypervectors, k-NN online |
+| **Tests** | 45 passing |
+| **Features** | 27 dimensions per window |
+| **HDC** | 10,048-dim hypervectors, online k-NN |
 | **GPU** | Euclidean distance, softmax T=0.08 |
-| **Organismos** | Shimeji, Cannabis sativa, Fungo generico |
-| **Amostragem** | 20 Hz, janela deslizante 2.5s |
+| **Organisms** | Shimeji, Cannabis sativa, Generic fungal |
+| **Sampling** | 20 Hz, 2.5s sliding window |
 
 ---
 
@@ -73,90 +71,89 @@ flowchart LR
 git clone https://github.com/gabrielmaialva33/vivino.git && cd vivino
 gleam deps download
 gleam build && gleam test
-gleam run                                    # auto-detecta Arduino
-VIVINO_ORGANISM=cannabis gleam run           # perfil Cannabis sativa
-VIVINO_ORGANISM=fungal_generic gleam run     # fungo generico
+gleam run                                    # auto-detects Arduino
+VIVINO_ORGANISM=cannabis gleam run           # Cannabis sativa profile
+VIVINO_ORGANISM=fungal_generic gleam run     # generic fungal
 ```
 
-Dashboard em **http://localhost:3000**
+Dashboard at **http://localhost:3000**
 
 <details>
-<summary><strong>Prerequisitos</strong></summary>
+<summary><strong>Prerequisites</strong></summary>
 
-| Ferramenta | Versao |
-|:-----------|:-------|
+| Tool | Version |
+|:-----|:--------|
 | Gleam | `>= 1.14.0` |
 | Erlang/OTP | `>= 28` |
 | [viva_tensor](https://github.com/gabrielmaialva33/viva_tensor) | local path dep |
-| Arduino | AD620 + ADC 14-bit (256x oversampling) |
+| Arduino | AD620 + 14-bit ADC (256x oversampling) |
 
 </details>
 
 ---
 
-## Organismos Suportados
-
-Cada especie tem perfil calibrado: ranges de quantizacao, prototipos GPU (19-dim x 6 estados), limiares de classificacao, e temperatura softmax.
+## Multi-Organism Profiles
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2d6a4f', 'primaryTextColor': '#fff'}}}%%
 graph LR
     P[Profile] --> S["🍄 Shimeji<br/>H. tessellatus<br/>σ ~5mV quiet"]
     P --> C["🌿 Cannabis<br/>C. sativa<br/>50-150mV APs"]
-    P --> F["🦠 Fungo Gen.<br/>Wide ranges<br/>σ ~8mV quiet"]
+    P --> F["🦠 Generic Fungal<br/>Wide ranges<br/>σ ~8mV quiet"]
 ```
 
-| Feature | Shimeji | Cannabis | Fungo Gen. |
-|:--------|:-------:|:--------:|:----------:|
+| Feature | Shimeji | Cannabis | Generic Fungal |
+|:--------|:-------:|:--------:|:--------------:|
 | Mean range | [-50, 50] mV | [-200, 200] mV | [-100, 100] mV |
 | Std range | [0, 50] | [0, 150] | [0, 80] |
 | Signal range | [0, 200] | [0, 600] | [0, 400] |
 | Energy range | [0, 150k] | [0, 2M] | [0, 500k] |
 | Resting σ max | 3 mV | 10 mV | 5 mV |
-| Spike dV/dt min | 500 | 1500 | 800 |
 
 ---
 
-## Classificacao Dual AI
+## Dual AI Classification
 
-Dois classificadores independentes, ambos com **online learning**:
+Two independent classifiers, both with **online learning**:
 
-### HDC Learner (Hyperdimensional Computing)
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2d6a4f', 'primaryTextColor': '#fff', 'primaryBorderColor': '#1a472a', 'lineColor': '#40916c'}}}%%
+flowchart TB
+    F[27 Features] --> GPU & HDC
 
+    subgraph GPU["⚡ GPU Classifier"]
+        direction LR
+        G1[Normalize] --> G2[Euclidean Distance] --> G3[Softmax]
+        G3 --> G4[EMA Learning<br/>α=0.1]
+    end
+
+    subgraph HDC["🧬 HDC Learner"]
+        direction LR
+        H1[Quantize + Bind] --> H2[10,048-dim HV] --> H3[k-NN Similarity]
+        H3 --> H4[Exemplar Buffer<br/>5 per state]
+    end
+
+    GPU --> R[6 States + Probabilities]
+    HDC --> R
+
+    style GPU fill:#1a472a,color:#fff
+    style HDC fill:#40916c,color:#fff
 ```
-Signal Features → Quantize → Role-Bind → Superpose → 10,048-dim HV
-                                                          ↓
-                                              k-NN vs exemplars + prototypes
-                                                          ↓
-                                              6 estados + similarity scores
-```
 
-- **k-NN hiperdimensional**: armazena ultimos 5 exemplares por estado (ring buffer)
-- **Prototipos iniciais**: peso 0.3x, exemplares peso 1.0x
-- **Auto-calibracao**: primeiras 60 amostras (3s) → RESTING automatico
-- **Online learning**: rotule pelo dashboard, aprende instantaneo
+### 6 Plant States
 
-### GPU Classifier (Euclidean Distance)
-
-- **19 features normalizadas** por bounds do perfil
-- **6 prototipos** calibrados por especie
-- **Softmax** com temperatura 0.08
-- **EMA learning**: alpha=0.1, atualiza prototipos quando rotulado
-
-### 6 Estados
-
-| Estado | Descricao |
-|:-------|:----------|
-| **RESTING** | Silencio eletrico, σ baixo |
-| **CALM** | Oscilacoes lentas |
-| **ACTIVE** | Spike trains, alta variabilidade |
-| **TRANSITION** | Sinal propagante, slope forte |
-| **STIMULUS** | Resposta rapida, alto dV/dt |
-| **STRESS** | Amplitude sustentada, caotico |
+| State | Description |
+|:------|:------------|
+| **RESTING** | Electrical silence, low σ |
+| **CALM** | Slow oscillations |
+| **ACTIVE** | Spike trains, high variability |
+| **TRANSITION** | Propagating signal, strong slope |
+| **STIMULUS** | Fast response, high dV/dt |
+| **STRESS** | Sustained amplitude, chaotic |
 
 ---
 
-## Arquitetura
+## Module Architecture
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#2d6a4f', 'primaryTextColor': '#fff', 'primaryBorderColor': '#1a472a', 'lineColor': '#40916c'}}}%%
@@ -196,31 +193,14 @@ graph TB
 ```
 
 <details>
-<summary><strong>27 Features Extraidas</strong></summary>
+<summary><strong>27 Extracted Features</strong></summary>
 
-| Grupo | Features | Count |
+| Group | Features | Count |
 |:------|:---------|:-----:|
 | **Time-domain** | mean, std, min, max, range, slope, energy, rms, dvdt_max, peak_freq, snr | 11 |
 | **Hjorth** | activity, mobility, complexity | 3 |
-| **MFCC** | 8 coeficientes via Goertzel DFT | 8 |
+| **MFCC** | 8 coefficients via Goertzel DFT | 8 |
 | **Spectral** | entropy, centroid, rolloff, flatness, crest | 5 |
-
-</details>
-
-<details>
-<summary><strong>Formato Serial Arduino</strong></summary>
-
-CSV a 20 Hz:
-```
-elapsed_ms,raw_adc,millivolts,deviation
-1523,8192,500.0,0.5
-1573,8205,504.0,4.5
-...
-```
-
-- ADC 14-bit com 256x oversampling
-- Resolucao: 0.305 mV/LSB
-- Amplificador: AD620 instrumentation amp
 
 </details>
 
@@ -228,57 +208,55 @@ elapsed_ms,raw_adc,millivolts,deviation
 
 ## Dashboard
 
-O dashboard em **http://localhost:3000** mostra em tempo real:
+Real-time dashboard at **http://localhost:3000**:
 
-- Grafico de sinal (mV) com scroll automatico
-- Barras de similaridade GPU + HDC lado a lado
-- 27 features extraidas
-- Botoes de rotulacao (6 estados) para online learning
-- Seletor de organismo (Shimeji / Cannabis / Fungo)
-- Stats de aprendizado (calibracao + exemplares por estado)
-- Controles Arduino (H/F/E/S/X)
+- Signal graph (mV) with auto-scroll
+- GPU + HDC similarity bars side by side
+- 27 extracted features
+- Label buttons (6 states) for online learning
+- Organism selector (Shimeji / Cannabis / Fungal)
+- Learning stats (calibration + exemplars per state)
+- Arduino stimulus controls (H/F/E/S/X)
 
-**Protocolo WebSocket:**
+**WebSocket Protocol:**
 
-| Comando | Direcao | Descricao |
-|:--------|:--------|:----------|
-| `L:RESTING` | Client → Server | Rotular estado atual |
-| `O:cannabis` | Client → Server | Trocar organismo |
-| `H` / `F` / `E` / `S` / `X` | Client → Arduino | Comandos de estimulacao |
-| JSON broadcast | Server → Client | Dados + classificacao a cada amostra |
+| Command | Direction | Description |
+|:--------|:----------|:------------|
+| `L:RESTING` | Client → Server | Label current state |
+| `O:cannabis` | Client → Server | Switch organism |
+| `H` / `F` / `E` / `S` / `X` | Client → Arduino | Stimulation commands |
+| JSON broadcast | Server → Client | Data + classification per sample |
 
 ---
 
-## Desenvolvimento
+## Build
 
 ```bash
-gleam build               # compilar (zero warnings)
-gleam test                # 45 testes
+gleam build               # compile (zero warnings)
+gleam test                # 45 tests
 gleam format src test     # auto-format
 gleam format --check      # CI check
 ```
 
-```bash
-# Pipe mode (sem Arduino)
-echo "1000,8192,500.0,0.5" | gleam run
+---
 
-# Debug serial
-stty -F /dev/ttyUSB0 115200 raw -echo -hupcl
-cat /dev/ttyUSB0
-```
+## Documentation
+
+| Language | Link |
+|:--------:|:----:|
+| English | [docs/en/](docs/en/) |
+| Português | [docs/pt-br/](docs/pt-br/) |
 
 ---
 
-## Ecossistema VIVA
+## VIVA Ecosystem
 
-Vivino faz parte do ecossistema [VIVA](https://github.com/gabrielmaialva33/viva):
-
-| Projeto | Descricao |
-|:--------|:----------|
-| [**viva**](https://github.com/gabrielmaialva33/viva) | Vida digital senciente em Gleam |
-| [**viva_tensor**](https://github.com/gabrielmaialva33/viva_tensor) | Tensores high-performance para BEAM |
-| [**viva_emotion**](https://github.com/gabrielmaialva33/viva_emotion) | Core emocional type-safe (PAD + O-U) |
-| **vivino** | Inteligencia bioeletrica de plantas |
+| Project | Description |
+|:--------|:------------|
+| [**viva**](https://github.com/gabrielmaialva33/viva) | Sentient digital life in Gleam |
+| [**viva_tensor**](https://github.com/gabrielmaialva33/viva_tensor) | High-performance tensors for BEAM |
+| [**viva_emotion**](https://github.com/gabrielmaialva33/viva_emotion) | Type-safe emotional core (PAD + O-U) |
+| **vivino** | Plant bioelectric intelligence |
 
 ---
 
@@ -286,6 +264,6 @@ Vivino faz parte do ecossistema [VIVA](https://github.com/gabrielmaialva33/viva)
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:1a472a,50:2d6a4f,100:40916c&height=120&section=footer" width="100%"/>
 
-*Feito com 🍄 e Gleam por [@gabrielmaialva33](https://github.com/gabrielmaialva33)*
+*Built with 🍄 and Gleam by [@gabrielmaialva33](https://github.com/gabrielmaialva33)*
 
 </div>
