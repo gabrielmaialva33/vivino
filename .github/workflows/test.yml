@@ -18,9 +18,7 @@ jobs:
 
       - name: Download pre-built NIF
         run: |
-          cd ../viva_tensor
-          gh release download v2.1.0 --repo gabrielmaialva33/viva_tensor --pattern 'viva_tensor_zig.so' --dir priv/
-          ls -la priv/
+          gh release download v2.1.0 --repo gabrielmaialva33/viva_tensor --pattern 'viva_tensor_zig.so' --dir ../viva_tensor/priv/
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -31,5 +29,13 @@ jobs:
           rebar3-version: "3"
 
       - run: gleam deps download
+      - run: gleam build
+
+      - name: Install NIF into build tree
+        run: |
+          mkdir -p build/dev/erlang/viva_tensor/priv
+          cp ../viva_tensor/priv/viva_tensor_zig.so build/dev/erlang/viva_tensor/priv/
+          ls -la build/dev/erlang/viva_tensor/priv/
+
       - run: gleam test
       - run: gleam format --check src test
