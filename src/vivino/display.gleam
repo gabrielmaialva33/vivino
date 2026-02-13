@@ -8,7 +8,7 @@ import gleam/string
 import gleam/yielder
 import vivino/serial/parser.{type Reading}
 import vivino/signal/features.{type SignalFeatures}
-import vivino/signal/hdc
+import vivino/signal/learner
 
 /// Print startup header
 pub fn header() {
@@ -60,11 +60,11 @@ pub fn print_features(f: SignalFeatures, state: String) {
   io.println("  State: " <> state)
 }
 
-/// Print HDC similarities
-pub fn print_hdc(sims: List(#(hdc.PlantState, Float)), best: String) {
+/// Print HDC learner similarities
+pub fn print_hdc_learner(sims: List(#(learner.PlantState, Float)), best: String) {
   let sim_str =
     sims
-    |> list.map(fn(s) { hdc.state_to_string(s.0) <> ":" <> pct(s.1) })
+    |> list.map(fn(s) { learner.state_to_string(s.0) <> ":" <> pct(s.1) })
     |> string.join(" ")
 
   io.println("  HDC: " <> sim_str <> " -> " <> best)
