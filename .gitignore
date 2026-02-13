@@ -1,6 +1,7 @@
 *.beam
 *.ez
 /build
+vivino_relay/build
 erl_crash.dump
 *.dump
 
@@ -16,6 +17,10 @@ erl_crash.dump
 .idea/
 *.swp
 *~
+
+# Secrets
+.env*
+!.env.example
 
 # OS
 .DS_Store

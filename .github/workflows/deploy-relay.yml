@@ -1,0 +1,49 @@
+name: CD — Deploy Relay
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'vivino_relay/**'
+      - '.github/workflows/deploy-relay.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-relay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync relay source to VPS
+        uses: burnett01/rsync-deployments@7.0.2
+        with:
+          switches: -az --delete --exclude=build --exclude=_build
+          path: vivino_relay/
+          remote_path: ~/vivino_relay/
+          remote_host: ${{ secrets.VPS_HOST }}
+          remote_user: ${{ secrets.VPS_USER }}
+          remote_key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Build and restart on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/vivino_relay
+            echo ">>> Building..."
+            gleam build 2>&1
+            echo ">>> Restarting vivino-relay..."
+            systemctl restart vivino-relay
+            sleep 2
+            systemctl is-active vivino-relay
+            curl -sf -o /dev/null http://localhost:3003/ && echo "OK: Dashboard up" || exit 1
+            echo ">>> Deploy complete!"

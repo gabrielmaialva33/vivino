@@ -72,6 +72,7 @@ type LoopState {
     gpu_seed_count: Int,
     relay_socket: Option(Dynamic),
     relay_addr: Option(#(String, Int)),
+    relay_secret: String,
   )
 }
 
@@ -119,6 +120,7 @@ pub fn main() {
   display.separator()
 
   // 5b. Connect to relay server if VIVINO_RELAY is set
+  let relay_secret = get_env("RELAY_SECRET") |> result.unwrap("")
   let #(relay_sock, relay_addr) = case get_env("VIVINO_RELAY") {
     Ok(addr) ->
       case string.split_once(addr, ":") {
@@ -126,11 +128,9 @@ pub fn main() {
           case int.parse(port_str) {
             Ok(port_num) -> {
               let addr_pair = #(host, port_num)
-              case tcp_connect(host, port_num) {
+              case relay_connect(host, port_num, relay_secret) {
                 Ok(sock) -> {
-                  io.println(
-                    "Relay connected: " <> host <> ":" <> port_str,
-                  )
+                  io.println("Relay connected: " <> host <> ":" <> port_str)
                   #(Some(sock), Some(addr_pair))
                 }
                 Error(_) -> {
@@ -167,6 +167,7 @@ pub fn main() {
       gpu_seed_count: 0,
       relay_socket: relay_sock,
       relay_addr: relay_addr,
+      relay_secret: relay_secret,
     )
 
   // 6. Open serial port directly
@@ -439,44 +440,29 @@ fn process_line(line: String, state: LoopState) -> LoopState {
               new_gpu_seeds,
             )
           process.send(state.pubsub, pubsub.Broadcast(json_str))
-          let new_relay =
-            relay_send(
-              state.relay_socket,
-              state.relay_addr,
-              json_str,
-              new_count,
+          let updated =
+            LoopState(
+              ..state,
+              hdc: final_hdc,
+              gpu: final_gpu,
+              buffer: trimmed,
+              sample_count: new_count,
+              temporal_ctx: new_temporal_ctx,
+              pseudo_label_count: new_pseudo_count,
+              last_pseudo_label_sample: new_last_pseudo,
+              quant_ranges: new_quant_ranges,
+              gpu_seed_count: new_gpu_seeds,
             )
-
-          LoopState(
-            ..state,
-            hdc: final_hdc,
-            gpu: final_gpu,
-            buffer: trimmed,
-            sample_count: new_count,
-            temporal_ctx: new_temporal_ctx,
-            pseudo_label_count: new_pseudo_count,
-            last_pseudo_label_sample: new_last_pseudo,
-            quant_ranges: new_quant_ranges,
-            gpu_seed_count: new_gpu_seeds,
-            relay_socket: new_relay,
-          )
+          let new_relay = relay_send(updated, json_str)
+          LoopState(..updated, relay_socket: new_relay)
         }
         False -> {
           let json_str = parser.reading_to_json(reading)
           process.send(state.pubsub, pubsub.Broadcast(json_str))
-          let new_relay =
-            relay_send(
-              state.relay_socket,
-              state.relay_addr,
-              json_str,
-              new_count,
-            )
-          LoopState(
-            ..state,
-            buffer: trimmed,
-            sample_count: new_count,
-            relay_socket: new_relay,
-          )
+          let updated =
+            LoopState(..state, buffer: trimmed, sample_count: new_count)
+          let new_relay = relay_send(updated, json_str)
+          LoopState(..updated, relay_socket: new_relay)
         }
       }
     }
@@ -493,13 +479,7 @@ fn process_line(line: String, state: LoopState) -> LoopState {
       )
       let json_str = parser.stim_to_json(stim)
       process.send(state.pubsub, pubsub.Broadcast(json_str))
-      let new_relay =
-        relay_send(
-          state.relay_socket,
-          state.relay_addr,
-          json_str,
-          state.sample_count,
-        )
+      let new_relay = relay_send(state, json_str)
       LoopState(..state, relay_socket: new_relay)
     }
     _ -> state
@@ -593,15 +573,30 @@ fn try_gpu_seed(
   }
 }
 
+/// Connect to relay with auth handshake (sends AUTH:secret as first line)
+fn relay_connect(
+  host: String,
+  port: Int,
+  secret: String,
+) -> Result(Dynamic, Nil) {
+  case tcp_connect(host, port) {
+    Ok(sock) ->
+      case secret {
+        "" -> Ok(sock)
+        s ->
+          case tcp_send(sock, "AUTH:" <> s) {
+            Ok(_) -> Ok(sock)
+            Error(_) -> Error(Nil)
+          }
+      }
+    Error(_) -> Error(Nil)
+  }
+}
+
 /// Send JSON to relay server, with auto-reconnect on failure.
 /// Returns updated relay socket (None if disconnected, Some if connected).
-fn relay_send(
-  socket: Option(Dynamic),
-  addr: Option(#(String, Int)),
-  json: String,
-  sample_count: Int,
-) -> Option(Dynamic) {
-  case socket {
+fn relay_send(state: LoopState, json: String) -> Option(Dynamic) {
+  case state.relay_socket {
     Some(sock) ->
       case tcp_send(sock, json) {
         Ok(_) -> Some(sock)
@@ -612,17 +607,14 @@ fn relay_send(
       }
     None ->
       // Try reconnect periodically
-      case addr {
+      case state.relay_addr {
         Some(#(host, port)) ->
-          case sample_count % relay_reconnect_interval == 0 {
+          case state.sample_count % relay_reconnect_interval == 0 {
             True ->
-              case tcp_connect(host, port) {
+              case relay_connect(host, port, state.relay_secret) {
                 Ok(new_sock) -> {
                   io.println(
-                    "Relay reconnected: "
-                    <> host
-                    <> ":"
-                    <> int.to_string(port),
+                    "Relay reconnected: " <> host <> ":" <> int.to_string(port),
                   )
                   let _ = tcp_send(new_sock, json)
                   Some(new_sock)

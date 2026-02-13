@@ -1,15 +1,19 @@
-name: test
+name: CI
 
 on:
   push:
-    branches:
-      - master
-      - main
+    branches: [master, main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +31,15 @@ jobs:
           otp-version: "28"
           gleam-version: "1.14.0"
           rebar3-version: "3"
+
+      - name: Cache Gleam deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/dev/erlang
+            ~/.cache/gleam
+          key: gleam-${{ hashFiles('gleam.toml', 'manifest.toml') }}
+          restore-keys: gleam-
 
       - name: Install Intel MKL runtime
         run: |
