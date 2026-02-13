@@ -1,0 +1,22 @@
+*.beam
+*.ez
+/build
+erl_crash.dump
+*.dump
+
+# Screenshots and debug artifacts
+*.png
+*.log
+
+# Playwright MCP temp
+.playwright-mcp/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
