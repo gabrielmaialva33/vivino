@@ -52,7 +52,25 @@ jobs:
         run: |
           sudo mkdir -p /usr/local/cuda/lib64
           echo 'void cusparseLtInit() {}' | gcc -shared -x c - -o /tmp/libcusparseLt.so.0
-          echo 'int cudaGetDevice() { return 0; }' | gcc -shared -x c - -o /tmp/libcudart.so.13
+          cat > /tmp/cuda_stubs.c << 'STUBS'
+          int cudaGetDevice() { return 0; }
+          int cudaSetDevice() { return 0; }
+          int cudaMalloc() { return 0; }
+          int cudaFree() { return 0; }
+          int cudaMemcpy() { return 0; }
+          int cudaMemset() { return 0; }
+          int cudaStreamCreate() { return 0; }
+          int cudaStreamSynchronize() { return 0; }
+          int cudaGetDeviceCount() { return 0; }
+          int cudaGetDeviceProperties() { return 0; }
+          void __cudaRegisterFatBinary() {}
+          void __cudaUnregisterFatBinary() {}
+          void __cudaRegisterFunction() {}
+          void __cudaRegisterVar() {}
+          void __cudaRegisterFatBinaryEnd() {}
+          void __cudaInitModule() {}
+          STUBS
+          gcc -shared -o /tmp/libcudart.so.13 /tmp/cuda_stubs.c
           sudo cp /tmp/libcusparseLt.so.0 /tmp/libcudart.so.13 /usr/local/cuda/lib64/
           sudo ldconfig
 
