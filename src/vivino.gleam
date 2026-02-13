@@ -38,6 +38,7 @@ import vivino/signal/features
 import vivino/signal/label_bridge
 import vivino/signal/learner
 import vivino/signal/profile
+import vivino/vision/loop as vision_loop
 import vivino/web/pubsub
 import vivino/web/server
 
@@ -119,7 +120,19 @@ pub fn main() {
   )
   display.separator()
 
-  // 5b. Connect to relay server if VIVINO_RELAY is set
+  // 5b. Start vision detector if CAMERA_IP is set
+  case get_env("CAMERA_IP") {
+    Ok(camera_ip) -> {
+      let vision_config = vision_loop.default_config(camera_ip)
+      // Spawn vision loop in a separate BEAM process (crash-isolated)
+      let _ =
+        process.spawn(fn() { vision_loop.run(vision_config, pubsub_subject) })
+      io.println("Vision detector starting for camera: " <> camera_ip)
+    }
+    Error(_) -> io.println("No CAMERA_IP set — vision detector disabled")
+  }
+
+  // 5c. Connect to relay server if VIVINO_RELAY is set
   let relay_secret = get_env("RELAY_SECRET") |> result.unwrap("")
   let #(relay_sock, relay_addr) = case get_env("VIVINO_RELAY") {
     Ok(addr) ->

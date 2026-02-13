@@ -88,7 +88,7 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
 .cb-fill.s5{background:linear-gradient(90deg,#c62828,#ef5350)}
 
 /* Bottom row */
-.bottom{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;flex-shrink:0}
+.bottom{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex-shrink:0}
 .card{background:var(--s1);border-radius:8px;padding:12px 14px;border:var(--card-border);box-shadow:var(--card-shadow)}
 .card .title{font-size:.6em;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:8px}
 .stim-btns{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end}
@@ -137,6 +137,20 @@ body{background:var(--bg);color:var(--t1);font-family:var(--mono);font-size:14px
 .tl{background:var(--s1);border-radius:8px;padding:12px 14px;border:var(--card-border);box-shadow:var(--card-shadow)}
 .tl .title{font-size:.6em;text-transform:uppercase;letter-spacing:1.5px;color:var(--t3);margin-bottom:6px}
 .tl canvas{width:100%;height:28px;display:block;border-radius:3px}
+
+/* Vision + PTZ */
+.vis-stats{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px}
+.vis-stat{text-align:center;padding:4px;background:rgba(255,255,255,.02);border-radius:4px}
+.vis-stat .vs-name{font-size:.55em;color:var(--t3);letter-spacing:.5px;text-transform:uppercase}
+.vis-stat .vs-val{font-size:.85em;font-weight:700;color:var(--t2)}
+.person-alert{display:none;padding:6px 12px;border-radius:4px;font-size:.7em;font-weight:700;color:var(--red);background:rgba(229,57,53,.1);border:1px solid rgba(229,57,53,.3);text-align:center;margin-bottom:8px;animation:bl .8s ease infinite}
+.ptz-pad{display:grid;grid-template-columns:repeat(3,40px);grid-template-rows:repeat(3,36px);gap:3px;justify-content:center;margin:6px auto}
+.ptz-btn{background:rgba(255,255,255,.02);border:1px solid var(--b1);color:var(--t2);border-radius:6px;font-family:var(--mono);font-size:.85em;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center}
+.ptz-btn:hover{border-color:var(--cyan);color:var(--cyan);background:rgba(0,212,255,.05)}
+.ptz-btn:active{transform:scale(.9)}
+.ptz-stop{background:rgba(229,57,53,.05);border-color:rgba(229,57,53,.3);color:var(--red)}
+.ptz-stop:hover{border-color:var(--red);background:rgba(229,57,53,.1)}
+.vis-det-list{max-height:50px;overflow-y:auto}
 
 /* Toast notifications */
 #toasts{position:fixed;top:16px;right:16px;z-index:999;display:flex;flex-direction:column;gap:6px;pointer-events:none}
@@ -320,6 +334,26 @@ fn body() -> String {
     <div class='tl'>
       <div class='title'>Linha do Tempo</div>
       <canvas id='timeline' height='24'></canvas>
+    </div>
+
+    <div class='card'>
+      <div class='title'>Visao <span id='visStat' style='color:var(--t3);font-weight:400'>offline</span></div>
+      <div id='personAlert' class='person-alert'>PESSOA DETECTADA</div>
+      <div class='vis-stats'>
+        <div class='vis-stat'><div class='vs-name'>FPS</div><div class='vs-val' id='visFps'>--</div></div>
+        <div class='vis-stat'><div class='vs-name'>INFER</div><div class='vs-val' id='visInfer'>--</div></div>
+        <div class='vis-stat'><div class='vs-name'>MOTION</div><div class='vs-val' id='visMotion'>--</div></div>
+        <div class='vis-stat'><div class='vs-name'>OBJETOS</div><div class='vs-val' id='visDets'>0</div></div>
+      </div>
+      <div class='title' style='margin-top:6px'>PTZ</div>
+      <div class='ptz-pad'>
+        <div></div><button class='ptz-btn' onclick='sendPtz(\"UP\")'>&#9650;</button><div></div>
+        <button class='ptz-btn' onclick='sendPtz(\"LEFT\")'>&#9664;</button>
+        <button class='ptz-btn ptz-stop' onclick='sendPtz(\"STOP\")'>&#9632;</button>
+        <button class='ptz-btn' onclick='sendPtz(\"RIGHT\")'>&#9654;</button>
+        <div></div><button class='ptz-btn' onclick='sendPtz(\"DOWN\")'>&#9660;</button><div></div>
+      </div>
+      <div class='vis-det-list' id='visDetList'></div>
     </div>
   </div>
 
@@ -585,6 +619,34 @@ function onOrganismAck(d){
   document.querySelectorAll('.org-btn').forEach(b=>{b.classList.toggle('active',b.dataset.org===d.organism);});
 }
 
+// === VISION + PTZ ===
+const _visFps=$('visFps'),_visInfer=$('visInfer'),_visMotion=$('visMotion'),
+      _visDets=$('visDets'),_personAlert=$('personAlert'),_visStat=$('visStat'),
+      _visDetList=$('visDetList');
+let _visTimeout=null;
+
+function onVision(d){
+  _visStat.textContent='online';_visStat.style.color='var(--grn)';
+  _visFps.textContent=d.fps;
+  _visInfer.textContent=d.inference_ms+'ms';
+  _visMotion.textContent=(d.motion*100).toFixed(1)+'%';
+  _visDets.textContent=d.detection_count;
+  _personAlert.style.display=d.person?'block':'none';
+  if(d.detections&&d.detections.length){
+    _visDetList.innerHTML=d.detections.map(det=>
+      '<div style=\"font-size:.65em;color:var(--t2);padding:2px 0\">'+det.class+' '+Math.round(det.conf*100)+'%</div>'
+    ).join('');
+  }else{_visDetList.innerHTML='';}
+  clearTimeout(_visTimeout);
+  _visTimeout=setTimeout(()=>{_visStat.textContent='offline';_visStat.style.color='var(--t3)';},5000);
+}
+
+function sendPtz(dir){
+  if(!_ws||_ws.readyState!==1){showToast('WebSocket desconectado','err');return;}
+  _ws.send('P:'+dir);
+}
+function onPtzAck(d){showToast('PTZ: '+d.direction,'ok');}
+
 // === WEBSOCKET ===
 function connect(){
   const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws');_ws=ws;
@@ -596,6 +658,8 @@ function connect(){
     else if(d.type==='cmd_ack')onCmdAck(d);
     else if(d.type==='label_ack')onLabelAck(d);
     else if(d.type==='organism_ack')onOrganismAck(d);
+    else if(d.type==='vision')onVision(d);
+    else if(d.type==='ptz_ack')onPtzAck(d);
     else{buf.push(d);if(!rafId)rafId=requestAnimationFrame(flush);}
   };
 }

@@ -17,6 +17,7 @@ import mist.{
 }
 import vivino/serial/port
 import vivino/signal/label_bridge
+import vivino/vision/ptz
 import vivino/web/dashboard
 import vivino/web/pubsub
 
@@ -131,6 +132,23 @@ fn handle_websocket(
                   conn,
                   "{\"type\":\"label_ack\",\"label\":\"" <> label <> "\"}",
                 )
+              mist.continue(state)
+            }
+            // PTZ command: P:UP, P:DOWN, P:LEFT, P:RIGHT, P:STOP
+            Ok(#("P", dir)) -> {
+              case ptz.parse_direction(dir) {
+                Ok(ptz_dir) -> {
+                  let _ = ptz.move("192.168.1.23", ptz_dir)
+                  io.println("PTZ: " <> dir)
+                  let _ =
+                    mist.send_text_frame(
+                      conn,
+                      "{\"type\":\"ptz_ack\",\"direction\":\"" <> dir <> "\"}",
+                    )
+                  Nil
+                }
+                Error(_) -> Nil
+              }
               mist.continue(state)
             }
             // Organism command: O:shimeji, O:cannabis, O:fungal_generic

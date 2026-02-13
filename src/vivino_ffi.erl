@@ -3,7 +3,9 @@
          send_serial_cmd/1, read_port_line/1, write_serial/2,
          put_label/1, get_label/0, put_organism/1, get_organism/0,
          get_env/1,
-         tcp_connect/2, tcp_send/2, tcp_close/1]).
+         tcp_connect/2, tcp_send/2, tcp_close/1,
+         ptz_move/2, ptz_stop/1,
+         open_vision/3, read_vision_line/1, vision_cmd/2]).
 
 %% Read a line from stdin with error handling.
 %% Returns {ok, Binary} | {error, nil}
@@ -156,6 +158,75 @@ send_serial_cmd(Cmd) ->
                 _ -> {error, nil}
             end
     end.
+
+%% ============================================================
+%% PTZ camera control via RTSP SET_PARAMETER
+%% ============================================================
+
+%% Move camera via RTSP SET_PARAMETER command.
+%% Direction: <<"UP">>, <<"DWON">>, <<"LEFT">>, <<"RIGHT">>, <<"STOP">>
+%% Note: Yoosee firmware uses "DWON" (typo), not "DOWN".
+ptz_move(Ip, Direction) ->
+    case gen_tcp:connect(binary_to_list(Ip), 554,
+                          [binary, {active, false}], 5000) of
+        {ok, Sock} ->
+            Setup = [<<"SETUP rtsp://">>, Ip, <<"/onvif1/track1 RTSP/1.0\r\n">>,
+                     <<"CSeq: 1\r\nUser-Agent: Vivino/1.0\r\n">>,
+                     <<"Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n">>],
+            gen_tcp:send(Sock, Setup),
+            gen_tcp:recv(Sock, 0, 5000),
+            Ptz = [<<"SET_PARAMETER rtsp://">>, Ip, <<"/onvif1 RTSP/1.0\r\n">>,
+                   <<"Content-type: ptzCmd: ">>, Direction, <<"\r\n">>,
+                   <<"CSeq: 2\r\nSession:\r\n\r\n">>],
+            gen_tcp:send(Sock, Ptz),
+            gen_tcp:recv(Sock, 0, 2000),
+            gen_tcp:close(Sock),
+            {ok, nil};
+        {error, _Reason} ->
+            {error, nil}
+    end.
+
+ptz_stop(Ip) ->
+    ptz_move(Ip, <<"STOP">>).
+
+%% ============================================================
+%% Vision detector (Python sidecar via Erlang port)
+%% ============================================================
+
+%% Open vision detector Python sidecar.
+%% Same pattern as open_serial — spawn_executable + line protocol.
+open_vision(RtspUrl, ModelPath, Conf) ->
+    PrivDir = code:priv_dir(vivino),
+    DetectorPath = filename:join(PrivDir, "vision_detector.py"),
+    ConfStr = float_to_list(Conf, [{decimals, 2}]),
+    Port = open_port(
+        {spawn_executable, "/usr/bin/python3"},
+        [{args, ["-u", DetectorPath,
+                 binary_to_list(RtspUrl),
+                 "--model", binary_to_list(ModelPath),
+                 "--conf", ConfStr]},
+         binary, {line, 8192}, exit_status, use_stdio]
+    ),
+    {ok, Port}.
+
+%% Read a JSON line from the vision port.
+%% Longer timeout than serial (RTSP buffering + GPU warmup).
+read_vision_line(Port) ->
+    receive
+        {Port, {data, {eol, Line}}} ->
+            {ok, Line};
+        {Port, {data, {noeol, Line}}} ->
+            {ok, Line};
+        {Port, {exit_status, _Status}} ->
+            {error, nil}
+    after 30000 ->
+        {error, nil}
+    end.
+
+%% Send command to vision detector (change conf, classes, stop).
+vision_cmd(Port, Cmd) ->
+    port_command(Port, [Cmd, "\n"]),
+    {ok, nil}.
 
 %% TCP relay client — connect to remote VPS relay server
 tcp_connect(Host, Port) ->
