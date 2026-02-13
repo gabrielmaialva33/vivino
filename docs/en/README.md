@@ -1,6 +1,6 @@
 # vivino
 
-**[Português](../pt-br/README.md)**
+**[Português](../pt-br/README.md)** | **[中文](../zh-cn/README.md)**
 
 ```mermaid
 flowchart LR

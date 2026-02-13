@@ -246,6 +246,7 @@ gleam format --check      # CI check
 |:--------:|:----:|
 | English | [docs/en/](docs/en/) |
 | Português | [docs/pt-br/](docs/pt-br/) |
+| 中文 | [docs/zh-cn/](docs/zh-cn/) |
 
 ---
 
