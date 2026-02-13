@@ -46,45 +46,23 @@ jobs:
           wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | sudo gpg --dearmor -o /usr/share/keyrings/intel-oneapi.gpg
           echo "deb [signed-by=/usr/share/keyrings/intel-oneapi.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/intel-oneapi.list
           sudo apt-get update
-          sudo apt-get install -y intel-oneapi-mkl
-
-      - name: Create CUDA stub libraries
-        run: |
-          # NIF needs libcudart.so.13 and libcusparseLt.so.0 with correct SONAME
-          cat > /tmp/cuda_stubs.c << 'EOF'
-          int cudaGetDevice(void* d) { return 0; }
-          int cudaSetDevice(int d) { return 0; }
-          int cudaGetDeviceCount(int* c) { if(c) *c = 0; return 0; }
-          int cudaMalloc(void** p, long s) { return 0; }
-          int cudaFree(void* p) { return 0; }
-          int cudaMemcpy(void* d, void* s, long c, int k) { return 0; }
-          int cudaMemset(void* d, int v, long c) { return 0; }
-          int cudaStreamCreate(void* s) { return 0; }
-          int cudaStreamSynchronize(void* s) { return 0; }
-          int cudaGetDeviceProperties(void* p, int d) { return 0; }
-          void* __cudaRegisterFatBinary(void* f) { return 0; }
-          void __cudaUnregisterFatBinary(void* h) {}
-          void __cudaRegisterFunction(void** m, void* h, char* d, char* n, int t, void* a, void* b, void* c, void* e, int* f) {}
-          void __cudaRegisterVar(void** m, char* h, char* d, char* n, int e, long s, int c, int v) {}
-          void __cudaRegisterFatBinaryEnd(void* h) {}
-          void __cudaInitModule(void* h) {}
-          EOF
-          gcc -shared -Wl,-soname,libcudart.so.13 -o /tmp/libcudart.so.13 /tmp/cuda_stubs.c
-          echo 'void cusparseLtInit() {}' | gcc -shared -Wl,-soname,libcusparseLt.so.0 -x c - -o /tmp/libcusparseLt.so.0
-          sudo cp /tmp/libcudart.so.13 /tmp/libcusparseLt.so.0 /usr/lib/x86_64-linux-gnu/
-          sudo ldconfig
+          sudo apt-get install -y intel-oneapi-mkl patchelf
 
       - run: gleam deps download
       - run: gleam build
 
-      - name: Ensure NIF in build tree
+      - name: Patch NIF to remove CUDA dependency
         run: |
-          mkdir -p build/dev/erlang/viva_tensor/priv
-          cp -n ../viva_tensor/priv/viva_tensor_zig.so build/dev/erlang/viva_tensor/priv/ 2>/dev/null || true
-          ls -la build/dev/erlang/viva_tensor/priv/
+          # NIF links against CUDA but CI has no GPU — strip CUDA deps with patchelf
+          NIF=build/dev/erlang/viva_tensor/priv/viva_tensor_zig.so
+          patchelf --remove-needed libcudart.so.13 "$NIF" || true
+          patchelf --remove-needed libcusparseLt.so.0 "$NIF" || true
+          echo "Patched NIF — CUDA deps removed"
+          readelf -d "$NIF" | grep NEEDED | head -10
 
       - name: Run tests
         run: gleam test
         env:
-          LD_LIBRARY_PATH: /opt/intel/oneapi/mkl/latest/lib:/usr/local/cuda/lib64
+          LD_LIBRARY_PATH: /opt/intel/oneapi/mkl/latest/lib
+
       - run: gleam format --check src test
