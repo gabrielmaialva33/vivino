@@ -48,21 +48,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y intel-oneapi-mkl
 
-      - name: Install CUDA runtime stubs
+      - name: Create CUDA stub libraries
         run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          sudo apt-get install -y libcudart12 libcusparselt0 2>/dev/null || true
-          # NIF links against libcudart.so.13 — create symlink from .12
-          CUDART=$(find /usr -name 'libcudart.so.12*' 2>/dev/null | head -1)
-          if [ -n "$CUDART" ]; then
-            sudo ln -sf "$CUDART" "$(dirname $CUDART)/libcudart.so.13"
-          fi
-          CUSPARSE=$(find /usr -name 'libcusparseLt.so.0*' 2>/dev/null | head -1)
-          if [ -n "$CUSPARSE" ]; then
-            sudo ln -sf "$CUSPARSE" "$(dirname $CUSPARSE)/libcusparseLt.so.0"
-          fi
+          # NIF needs libcudart.so.13 and libcusparseLt.so.0 with correct SONAME
+          cat > /tmp/cuda_stubs.c << 'EOF'
+          int cudaGetDevice(void* d) { return 0; }
+          int cudaSetDevice(int d) { return 0; }
+          int cudaGetDeviceCount(int* c) { *c = 0; return 0; }
+          EOF
+          gcc -shared -Wl,-soname,libcudart.so.13 -o /tmp/libcudart.so.13 /tmp/cuda_stubs.c
+          echo 'void cusparseLtInit() {}' | gcc -shared -Wl,-soname,libcusparseLt.so.0 -x c - -o /tmp/libcusparseLt.so.0
+          sudo cp /tmp/libcudart.so.13 /tmp/libcusparseLt.so.0 /usr/lib/x86_64-linux-gnu/
           sudo ldconfig
 
       - run: gleam deps download
