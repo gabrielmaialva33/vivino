@@ -46,19 +46,69 @@ jobs:
           wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | sudo gpg --dearmor -o /usr/share/keyrings/intel-oneapi.gpg
           echo "deb [signed-by=/usr/share/keyrings/intel-oneapi.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/intel-oneapi.list
           sudo apt-get update
-          sudo apt-get install -y intel-oneapi-mkl patchelf
+          sudo apt-get install -y intel-oneapi-mkl
+
+      - name: Create CUDA stub libraries
+        run: |
+          # NIF links against libcudart.so.13 with versioned symbols (@libcudart.so.13).
+          # CI has no GPU — create stubs with correct SONAME + ELF version definition.
+          cat > /tmp/cuda_stubs.c << 'CEOF'
+          #include <stddef.h>
+          int cudaGetDevice(void* d) { return 0; }
+          int cudaDeviceGetAttribute(int* v, int a, int d) { return 0; }
+          int cudaDeviceSynchronize(void) { return 0; }
+          int cudaMalloc(void** p, size_t s) { return 0; }
+          int cudaFree(void* p) { return 0; }
+          int cudaMemset(void* d, int v, size_t c) { return 0; }
+          int cudaMemsetAsync(void* d, int v, size_t c, void* s) { return 0; }
+          int cudaStreamCreate(void** s) { return 0; }
+          int cudaStreamDestroy(void* s) { return 0; }
+          int cudaStreamBeginCapture(void* s, int m) { return 0; }
+          int cudaStreamEndCapture(void* s, void** g) { return 0; }
+          int cudaEventCreate(void** e) { return 0; }
+          int cudaEventDestroy(void* e) { return 0; }
+          int cudaEventRecord(void* e, void* s) { return 0; }
+          int cudaEventSynchronize(void* e) { return 0; }
+          int cudaEventElapsedTime(float* ms, void* s, void* e) { return 0; }
+          int cudaFuncSetAttribute(void* f, int a, int v) { return 0; }
+          int cudaGetLastError(void) { return 0; }
+          const char* cudaGetErrorString(int e) { return "stub"; }
+          int cudaGraphDestroy(void* g) { return 0; }
+          int cudaGraphExecDestroy(void* g) { return 0; }
+          int cudaGraphInstantiate(void** ge, void* g, unsigned long long f) { return 0; }
+          int cudaGraphLaunch(void* ge, void* s) { return 0; }
+          int cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int* b, void* f, int bs, size_t ds, unsigned int fl) { return 0; }
+          void* __cudaRegisterFatBinary(void* f) { return NULL; }
+          void __cudaUnregisterFatBinary(void* h) {}
+          void __cudaRegisterFatBinaryEnd(void* h) {}
+          void __cudaRegisterFunction(void** m, const char* h, char* d, const char* n, int t, void* a, void* b, void* c, void* e, int* f) {}
+          void __cudaRegisterVar(void** m, char* h, char* d, const char* n, int e, size_t s, int c, int v) {}
+          void __cudaInitModule(void* h) {}
+          void* __cudaGetKernel(void** m, const char* n) { return NULL; }
+          int __cudaLaunchKernel(const void* f, void* g, void* b, void** a, size_t s, void* st) { return 0; }
+          int __cudaPopCallConfiguration(void* g, void* b, size_t* s, void* st) { return 0; }
+          int __cudaPushCallConfiguration(void* g, void* b, size_t s, void* st) { return 0; }
+          CEOF
+          # Version script: ld.so checks that the .so provides version definition "libcudart.so.13"
+          echo 'libcudart.so.13 { global: *; };' > /tmp/cuda.map
+          gcc -shared -Wl,-soname,libcudart.so.13 -Wl,--version-script=/tmp/cuda.map \
+              -o /tmp/libcudart.so.13 /tmp/cuda_stubs.c
+          # cusparseLt stub
+          echo 'void cusparseLtInit(void) {}' | \
+              gcc -shared -Wl,-soname,libcusparseLt.so.0 -x c - -o /tmp/libcusparseLt.so.0
+          sudo cp /tmp/libcudart.so.13 /tmp/libcusparseLt.so.0 /usr/lib/x86_64-linux-gnu/
+          sudo ldconfig
+          echo "CUDA stubs installed with version definition:"
+          readelf -V /usr/lib/x86_64-linux-gnu/libcudart.so.13 | head -10
 
       - run: gleam deps download
       - run: gleam build
 
-      - name: Patch NIF to remove CUDA dependency
+      - name: Ensure NIF in build tree
         run: |
-          # NIF links against CUDA but CI has no GPU — strip CUDA deps with patchelf
-          NIF=build/dev/erlang/viva_tensor/priv/viva_tensor_zig.so
-          patchelf --remove-needed libcudart.so.13 "$NIF" || true
-          patchelf --remove-needed libcusparseLt.so.0 "$NIF" || true
-          echo "Patched NIF — CUDA deps removed"
-          readelf -d "$NIF" | grep NEEDED | head -10
+          mkdir -p build/dev/erlang/viva_tensor/priv
+          cp -n ../viva_tensor/priv/viva_tensor_zig.so build/dev/erlang/viva_tensor/priv/ 2>/dev/null || true
+          ls -la build/dev/erlang/viva_tensor/priv/
 
       - name: Run tests
         run: gleam test
