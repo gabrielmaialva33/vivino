@@ -65,5 +65,8 @@ jobs:
           cp -n ../viva_tensor/priv/viva_tensor_zig.so build/dev/erlang/viva_tensor/priv/ 2>/dev/null || true
           ls -la build/dev/erlang/viva_tensor/priv/
 
-      - run: gleam test
+      - name: Run tests
+        run: gleam test
+        env:
+          LD_LIBRARY_PATH: /opt/intel/oneapi/mkl/latest/lib:/usr/local/cuda/lib64
       - run: gleam format --check src test
