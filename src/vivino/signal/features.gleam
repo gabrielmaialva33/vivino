@@ -539,25 +539,65 @@ pub fn to_tensor(f: SignalFeatures) -> t.Tensor {
   ))
 }
 
-/// Classify state based on calibrated thresholds (shimeji mycelium)
-/// Shimeji signals are ~10-15x weaker than sweet potato tuber
+/// Classify state based on shimeji default thresholds
 pub fn classify_state(f: SignalFeatures) -> String {
+  classify_state_with(f, default_thresholds())
+}
+
+/// Classify with configurable thresholds from an organism profile
+pub fn classify_state_with(f: SignalFeatures, t: FeatureThresholds) -> String {
   let abs_slope = float.absolute_value(f.slope)
 
-  // Spike-like: fast transient + high range (fungal threshold)
-  case f.dvdt_max >. 500.0 && f.range >. 60.0 {
+  // Spike-like: fast transient + high range
+  case f.dvdt_max >. t.spike_dvdt_min && f.range >. t.spike_range_min {
     True -> "STRONG_STIMULUS"
     False ->
       case True {
-        _ if f.std <. 3.0 && f.range <. 15.0 -> "RESTING"
-        _ if f.std >. 25.0 -> "AGITATED"
-        _ if f.range >. 120.0 -> "STRONG_STIMULUS"
-        _ if abs_slope >. 8.0 && f.std >. 6.0 -> "TRANSITION"
-        _ if f.std >. 8.0 -> "ACTIVE"
-        _ if f.std >. 3.0 -> "CALM"
+        _ if f.std <. t.resting_std_max && f.range <. t.resting_range_max ->
+          "RESTING"
+        _ if f.std >. t.agitated_std_min -> "AGITATED"
+        _ if f.range >. t.strong_range_min -> "STRONG_STIMULUS"
+        _
+          if abs_slope >. t.transition_slope_min
+          && f.std >. t.transition_std_min
+        -> "TRANSITION"
+        _ if f.std >. t.active_std_min -> "ACTIVE"
+        _ if f.std >. t.resting_std_max -> "CALM"
         _ -> "RESTING"
       }
   }
+}
+
+/// Feature thresholds for rule-based classification
+pub type FeatureThresholds {
+  FeatureThresholds(
+    resting_std_max: Float,
+    resting_range_max: Float,
+    calm_std_max: Float,
+    active_std_min: Float,
+    agitated_std_min: Float,
+    strong_range_min: Float,
+    spike_dvdt_min: Float,
+    spike_range_min: Float,
+    transition_slope_min: Float,
+    transition_std_min: Float,
+  )
+}
+
+/// Shimeji default thresholds (backward compatibility)
+pub fn default_thresholds() -> FeatureThresholds {
+  FeatureThresholds(
+    resting_std_max: 3.0,
+    resting_range_max: 15.0,
+    calm_std_max: 8.0,
+    active_std_min: 8.0,
+    agitated_std_min: 25.0,
+    strong_range_min: 120.0,
+    spike_dvdt_min: 500.0,
+    spike_range_min: 60.0,
+    transition_slope_min: 8.0,
+    transition_std_min: 6.0,
+  )
 }
 
 /// Convert features to JSON
