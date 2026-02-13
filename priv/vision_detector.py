@@ -134,20 +134,8 @@ class VisionDetector:
         stdin_thread = threading.Thread(target=self.listen_stdin, daemon=True)
         stdin_thread.start()
 
-        # Try UDP first, fall back to TCP
-        cap = None
-        for transport in ["udp", "tcp"]:
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{transport}"
-            attempt = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-            if attempt.isOpened():
-                ret, _ = attempt.read()
-                if ret:
-                    cap = attempt
-                    print(json.dumps({"status": "stream_connected",
-                                      "transport": transport}), flush=True)
-                    break
-                attempt.release()
-        if cap is None:
+        cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
             print(json.dumps({"error": "Cannot open RTSP stream",
                               "url": self.rtsp_url}), flush=True)
             sys.exit(1)

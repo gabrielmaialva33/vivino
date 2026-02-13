@@ -210,6 +210,8 @@ open_vision(RtspUrl, ModelPath, Conf) ->
                  binary_to_list(RtspUrl),
                  "--model", binary_to_list(ModelPath),
                  "--conf", ConfStr]},
+         {env, [{"OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;udp"},
+                {"YOLO_VERBOSE", "false"}]},
          binary, {line, 8192}, exit_status, use_stdio]
     ),
     {ok, Port}.
