@@ -22,6 +22,9 @@ erl_crash.dump
 .env*
 !.env.example
 
+# External repos (research references)
+torchhd/
+
 # OS
 .DS_Store
 Thumbs.db
